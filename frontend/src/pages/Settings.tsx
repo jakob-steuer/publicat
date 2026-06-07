@@ -262,7 +262,7 @@ export default function Settings() {
       </div>
 
       <div className="border rounded-lg p-6 bg-card shadow-sm relative z-50">
-        <h2 className="text-xl font-semibold mb-4">Followed Entities</h2>
+        <h2 className="text-xl font-semibold mb-4">Followed Authors</h2>
         <p className="text-sm text-muted-foreground mb-6">
           Track specific authors. Papers matching these will receive a static score boost (+0.15 by default), making them more likely to be highlighted and summarized.
         </p>
@@ -358,7 +358,7 @@ export default function Settings() {
       </div>
 
       <div className="border rounded-lg p-6 bg-card shadow-sm">
-        <h2 className="text-xl font-semibold mb-4">LLM Configuration</h2>
+        <h2 className="text-xl font-semibold mb-4">API Keys</h2>
         <p className="text-sm text-muted-foreground mb-6">
           Provide your API keys to enable Tier 2 (Brief Summaries via Gemini) and Tier 3 (Deep Summaries via Anthropic) AI processing.
           Ollama will be used by default if keys are missing.

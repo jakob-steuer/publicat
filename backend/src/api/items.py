@@ -113,7 +113,7 @@ async def run_ingestion(db: Session, days_back: int = 3):
     
     arxiv_ids = await harvest_arxiv_oai(["cs", "q-bio"], since)
     for aid in arxiv_ids:
-        all_identifiers.add(f"ARXIV:{aid}")
+        all_identifiers.add(aid)
         
     biorxiv_ids = await harvest_biorxiv_api(since)
     for bid in biorxiv_ids:
