@@ -4,7 +4,7 @@ export default function Help() {
   return (
     <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6 lg:px-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="mb-8 border-b border-border/50 pb-6">
-        <h1 className="text-3xl font-bold tracking-tight mb-2">❓ Help & Tutorial</h1>
+        <h1 className="text-3xl font-bold tracking-tight mb-2">Help & Tutorial</h1>
         <p className="text-muted-foreground text-lg">
           Learn how to get the most out of your personalized AI research feed.
         </p>
@@ -47,7 +47,7 @@ export default function Help() {
             The AI matches papers based on the semantic meaning of your topic description and strict keyword boosting. For the best results, focus heavily on the <strong>methodology and core concepts</strong>, and avoid generic statements.
           </p>
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-5 mb-4">
-            <h3 className="font-semibold text-primary mb-2">💡 Pro Tip: Use an LLM to write your topic</h3>
+            <h3 className="font-semibold text-primary mb-2">Pro Tip: Use an LLM to write your topic</h3>
             <p className="text-sm text-foreground/80 italic mb-2">
               "I want to create a feed for academic papers about [Your Topic]. Write a 2-3 sentence description focusing strictly on the methodology and core technologies involved, avoiding generic outcomes. Then provide a comma-separated list of 3-5 hyper-specific keywords."
             </p>
@@ -61,7 +61,7 @@ export default function Help() {
             </ul>
           </div>
           <p className="text-xs text-muted-foreground mt-3 flex items-center gap-1">
-            <span>⚠️</span> Note: When you create a new topic, the first sync fetches 30 days of history and may take a few minutes!
+            <span>Note:</span> When you create a new topic, the first sync fetches 30 days of history and may take a few minutes!
           </p>
         </section>
 
@@ -85,13 +85,13 @@ export default function Help() {
           </h2>
           <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-3">
-              <h3 className="font-semibold text-lg flex items-center gap-2">🪄 Zotero RSS</h3>
+              <h3 className="font-semibold text-lg flex items-center gap-2">Zotero RSS</h3>
               <p className="text-sm text-foreground/80 leading-relaxed">
                 Every topic has a dedicated Zotero RSS URL button at the top of the feed. Click it to copy the link, then in Zotero go to <strong>New Feed → From URI</strong>. High-scoring, AI-summarized papers will automatically pipe into Zotero!
               </p>
             </div>
             <div className="space-y-3">
-              <h3 className="font-semibold text-lg flex items-center gap-2">📥 Export Citations</h3>
+              <h3 className="font-semibold text-lg flex items-center gap-2">Export Citations</h3>
               <p className="text-sm text-foreground/80 leading-relaxed">
                 In your Starred Library, you can export all your saved papers as a JSON file, or copy their citations to share with colleagues or use in your manuscripts.
               </p>

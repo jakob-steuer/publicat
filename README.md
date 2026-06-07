@@ -8,7 +8,7 @@
 
 **PUBLIKATER** automatically ingests, scores, and summarizes scientific papers based on your highly specific topics of interest. Stay on top of the latest research without drowning in generic feeds.
 
-## 🚀 Quick Start & Installation
+## Quick Start & Installation
 
 There are two ways to run Publikater: the **1-Click Launcher** (recommended for most users) or via manual command line setup.
 
@@ -60,7 +60,7 @@ Make sure you have Node.js (v18+) and Python (3.11+) with `uv` installed.
 
 ---
 
-## 🎯 Tutorial: Setting Up Your First Topic
+## Tutorial: Setting Up Your First Topic
 
 Publikater uses advanced AI to semantically match papers to your topics. The better you describe your topic, the better your feed will be!
 
@@ -79,7 +79,7 @@ If you're unsure how to describe your topic, ask an LLM of your choice:
 
 ---
 
-## 🧭 Using the Interface
+## Using the Interface
 
 Publikater uses a simple, swipe-like tri-state system to help you reach Inbox Zero.
 
@@ -92,7 +92,7 @@ Publikater uses a simple, swipe-like tri-state system to help you reach Inbox Ze
 - **Export Citations:** Easily export your starred papers to share or use in manuscripts.
 
 ### Zotero Integration
-Every topic in Publikater features a dedicated "🪄 Zotero RSS URL" button at the top of the dashboard.
+Every topic in Publikater features a dedicated "Zotero RSS URL" button at the top of the dashboard.
 
 **How it works:**
 1. Click the button to copy your unique topic URL.
@@ -103,7 +103,7 @@ Every topic in Publikater features a dedicated "🪄 Zotero RSS URL" button at t
 
 ---
 
-## 🧠 Local vs. Cloud AI
+## Local vs. Cloud AI
 
 Publikater relies heavily on AI. All semantic embedding and paper matching runs **100% locally** on your machine using optimized PyTorch models. 
 
@@ -113,7 +113,7 @@ For generating the actual text summaries, you have a choice (configurable in Set
 
 ---
 
-## ⚖️ Legal & Tech Stack
+## Legal & Tech Stack
 
 **Tech Stack:** React, TypeScript, Vite, TailwindCSS • Python, FastAPI, SQLite • Semantic Scholar SPECTER v2, Gemini, Anthropic.
 
