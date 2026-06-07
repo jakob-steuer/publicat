@@ -1,0 +1,24 @@
+[project]
+name = "backend"
+version = "1.0.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.18.4",
+    "anthropic>=0.105.2",
+    "apscheduler>=3.11.2",
+    "fastapi>=0.136.3",
+    "feedparser>=6.0.12",
+    "google-genai>=2.7.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
+    "python-dateutil>=2.9.0.post0",
+    "python-dotenv>=1.2.2",
+    "sentence-transformers>=5.5.1",
+    "sqlalchemy>=2.0.50",
+    "torch>=2.12.0",
+    "uvicorn>=0.48.0",
+    "xmltodict>=1.0.4",
+]

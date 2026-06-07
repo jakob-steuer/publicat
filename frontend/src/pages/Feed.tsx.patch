@@ -1,0 +1,61 @@
+--- frontend/src/pages/Feed.tsx
++++ frontend/src/pages/Feed.tsx
+@@ -29,6 +29,11 @@
+   const [selectedItems, setSelectedItems] = useState<string[]>([])
+ 
+   const { data: topics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
++
++  const { data: follows } = useQuery({
++    queryKey: ['follows'],
++    queryFn: async () => (await axios.get('http://localhost:8001/follows/')).data
++  })
+   
+   const { data: syncProgress } = useQuery({
+     queryKey: ['syncProgress'],
+@@ -72,6 +77,20 @@
+     onSuccess: () => refetch()
+   })
+ 
++  const createFollow = useMutation({
++    mutationFn: async (newFollow: any) => {
++      return axios.post('http://localhost:8001/follows/', newFollow)
++    },
++    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
++  })
++
++  const deleteFollow = useMutation({
++    mutationFn: async (followId: string) => {
++      return axios.delete(`http://localhost:8001/follows/${followId}`)
++    },
++    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
++  })
++
+   const handleFetch = async () => {
+     if (syncProgress?.status === 'running' || syncProgress?.status === 'paused') return
+     await triggerFetch()
+@@ -194,8 +213,22 @@
+           <h3 className="font-semibold text-sm leading-snug mb-1 text-muted-foreground group-hover:text-foreground transition-colors">
+             {item.title}
+           </h3>
+-          <p className="text-xs text-muted-foreground/80">
+-            {item.authors?.join(', ')}
++          <p className="text-xs text-muted-foreground/80 leading-relaxed">
++            {item.authors?.map((author: string, idx: number) => {
++              const followRecord = follows?.find((f: any) => f.entity_type === 'author' && f.entity_value.toLowerCase() === author.toLowerCase())
++              const isFollowed = !!followRecord
++              return (
++                <span key={idx} className="inline-block">
++                  <button 
++                    onClick={(e) => { e.preventDefault(); isFollowed ? deleteFollow.mutate(followRecord.id) : createFollow.mutate({ entity_type: 'author', entity_value: author, boost_value: 0.15 }) }}
++                    className={`hover:underline cursor-pointer ${isFollowed ? 'text-primary font-semibold' : ''}`}
++                    title={isFollowed ? "Unfollow Author" : "Follow Author"}
++                  >
++                    {author}
++                  </button>
++                  {idx < item.authors.length - 1 && <span className="mr-1">,</span>}
++                </span>
++              )
++            })}
+           </p>
+         </div>
+         

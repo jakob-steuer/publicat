@@ -1,0 +1,25 @@
+FROM python:3.12-slim
+
+# Install system dependencies if necessary (e.g., for uv or MLX later)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /app
+
+# Copy pyproject.toml / requirements if you had them, but with uv and standard init we have pyproject.toml
+COPY pyproject.toml .
+# We can also copy the uv.lock if we generated one
+COPY uv.lock .
+
+RUN uv sync --frozen || uv pip install -r pyproject.toml
+
+# Copy backend code
+COPY . /app
+
+# Expose FastAPI port
+EXPOSE 8001
+
+CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8001"]
