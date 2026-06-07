@@ -47,9 +47,9 @@ export default function Help() {
             The AI matches papers based on the semantic meaning of your topic description and strict keyword boosting. For the best results, focus heavily on the <strong>methodology and core concepts</strong>, and avoid generic statements.
           </p>
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-5 mb-4">
-            <h3 className="font-semibold text-primary mb-2">Pro Tip: Use an LLM to write your topic</h3>
+            <h3 className="font-semibold text-primary mb-2">Tip: Use an LLM to write your topic</h3>
             <p className="text-sm text-foreground/80 italic mb-2">
-              "I want to create a feed for academic papers about [Your Topic]. Write a 2-3 sentence description focusing strictly on the methodology and core technologies involved, avoiding generic outcomes. Then provide a comma-separated list of 3-5 hyper-specific keywords."
+              "I want to create a feed for academic papers about [Your Topic]. Write a 2-3 sentence description focusing strictly on the methodology and core technologies involved, avoiding generic outcomes. Then provide a comma-separated list of 3-5 specific keywords."
             </p>
           </div>
           <div className="bg-muted/30 border border-border/50 p-5 rounded-xl text-sm">

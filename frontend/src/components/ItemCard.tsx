@@ -161,7 +161,24 @@ export function ItemCard({
                         </button>
                       </>
                     ) : (
-                      <span className={isFollowed ? 'text-primary font-semibold' : ''}>{author.name}</span>
+                      <>
+                        <span className={isFollowed ? 'text-primary font-semibold' : ''}>{author.name}</span>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            const followByName = follows?.find((f: Follow) => f.entity_type === 'author' && f.entity_value.toLowerCase() === author.name.toLowerCase());
+                            if (followByName) {
+                              deleteFollow.mutate(followByName.id)
+                            } else {
+                              createFollow.mutate({ entity_type: 'author', entity_value: author.name, boost_value: 0.15 })
+                            }
+                          }}
+                          className={`flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] font-bold transition-colors ${follows?.find((f: Follow) => f.entity_type === 'author' && f.entity_value.toLowerCase() === author.name.toLowerCase()) ? 'bg-primary text-primary-foreground hover:bg-destructive hover:text-destructive-foreground' : 'bg-muted text-muted-foreground hover:bg-primary hover:text-primary-foreground'}`}
+                          title={follows?.find((f: Follow) => f.entity_type === 'author' && f.entity_value.toLowerCase() === author.name.toLowerCase()) ? "Unfollow Author" : "Follow Author"}
+                        >
+                          {follows?.find((f: Follow) => f.entity_type === 'author' && f.entity_value.toLowerCase() === author.name.toLowerCase()) ? '✓' : '+'}
+                        </button>
+                      </>
                     )}
                     {idx < arr.length - 1 && <span className="text-muted-foreground">,</span>}
                   </span>
