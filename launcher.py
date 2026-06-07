@@ -66,9 +66,9 @@ def main():
             env=env
         )
 
-        # Wait for the server to start
-        print("Waiting for server to initialize...")
-        for _ in range(30):
+        # Wait for the server to start (First run can take 5+ mins to download PyTorch models)
+        print("Waiting for server to initialize (This may take several minutes on first launch while AI models download)...")
+        for _ in range(600):
             if is_port_in_use(port):
                 break
             time.sleep(0.5)
