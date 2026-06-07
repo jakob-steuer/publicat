@@ -46,8 +46,14 @@ def main():
     print("\n[2/3] Preparing Backend Environment...")
     print("Dependencies are managed by uv.")
 
-    # 3. Start Backend
-    print("\n[3/3] Starting Server...")
+    # 3. Initialize Database
+    print("\n[3/4] Initializing Database Schema...")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = backend_dir
+    run_command([sys.executable, "scripts/init_db.py"], cwd=backend_dir, env=env)
+
+    # 4. Start Server
+    print("\n[4/4] Starting Server...")
     port = 8001
     
     if is_port_in_use(port):
