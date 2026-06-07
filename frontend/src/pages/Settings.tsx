@@ -421,6 +421,30 @@ export default function Settings() {
           </button>
         </form>
       </div>
+
+      <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">
+        <h2 className="text-xl font-semibold mb-2 text-red-700 dark:text-red-400">Data Management</h2>
+        <p className="text-sm text-red-600/80 dark:text-red-400/80 mb-6">
+          Permanently delete all papers from your local database that are not explicitly starred. This action cannot be undone.
+        </p>
+        
+        <button 
+          onClick={async () => {
+            if(window.confirm('Are you sure you want to delete all unstarred papers? This action cannot be undone.')) {
+              try {
+                const res = await axios.delete('http://localhost:8001/items/unstarred');
+                alert(`Successfully deleted ${res.data.deleted} unstarred papers.`);
+                queryClient.invalidateQueries();
+              } catch (e) {
+                alert('Failed to clear unstarred papers.');
+              }
+            }
+          }}
+          className="bg-red-600 text-white px-4 py-2 rounded font-medium hover:bg-red-700 transition-colors"
+        >
+          Clear Unstarred Inbox
+        </button>
+      </div>
     </div>
   )
 }

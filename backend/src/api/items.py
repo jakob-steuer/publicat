@@ -492,6 +492,33 @@ def hide_item(item_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "success"}
 
+@router.delete("/unstarred", response_model=dict)
+def clear_unstarred(db: Session = Depends(get_db)):
+    try:
+        # Delete items that are NOT starred
+        # We also need to delete their ItemScores, but SQLAlchemy handles that via cascade if configured,
+        # or we can delete them explicitly if not.
+        from src.models.item_score import ItemScore
+        
+        # First find unstarred item IDs
+        unstarred_items = db.query(Item.id).filter(Item.is_starred == False).all()
+        unstarred_ids = [i[0] for i in unstarred_items]
+        
+        if not unstarred_ids:
+            return {"status": "success", "deleted": 0}
+            
+        # Delete scores first (to avoid foreign key constraint issues if cascade is not set)
+        db.query(ItemScore).filter(ItemScore.item_id.in_(unstarred_ids)).delete(synchronize_session=False)
+        
+        # Delete items
+        deleted_count = db.query(Item).filter(Item.id.in_(unstarred_ids)).delete(synchronize_session=False)
+        
+        db.commit()
+        return {"status": "success", "deleted": deleted_count}
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+
 @router.put("/{item_id}/unhide", response_model=dict)
 def unhide_item(item_id: str, db: Session = Depends(get_db)):
     item = db.query(Item).filter(Item.id == item_id).first()

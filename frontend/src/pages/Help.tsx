@@ -68,7 +68,7 @@ export default function Help() {
         {/* Section 3: Following Authors */}
         <section>
           <h2 className="text-2xl font-semibold mb-4 text-primary flex items-center gap-2">
-            3. Following Authors & Venues
+            3. Following Authors
           </h2>
           <p className="text-foreground/80 mb-4 leading-relaxed">
             If you see a paper by an author you want to track, simply click the <span className="font-mono bg-muted px-1 rounded text-xs">+</span> icon next to their name. 
@@ -105,7 +105,7 @@ export default function Help() {
             5. Semantic Scholar API Key
           </h2>
           <p className="text-foreground/80 leading-relaxed mb-4">
-            Publicat relies heavily on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. <strong className="text-red-500 dark:text-red-400">Without a key, your paper fetching will likely fail with "Too Many Requests" errors. This is highly recommended.</strong>
+            Publicat relies heavily on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. <strong className="text-red-500 dark:text-red-400">It is highly recommended to register for a free Semantic Scholar API Key. Without a key, your paper fetching will likely fail with "Too Many Requests" errors.</strong>
           </p>
           <div className="bg-primary/5 border border-primary/20 p-5 rounded-xl">
             <h3 className="font-semibold text-primary mb-2">How to get your free key:</h3>
@@ -127,12 +127,12 @@ export default function Help() {
           </p>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="bg-primary/5 border border-primary/20 p-4 rounded-xl">
-              <h3 className="font-semibold mb-1 text-primary">Cloud APIs (Recommended)</h3>
+              <h3 className="font-semibold mb-1 text-primary">Cloud APIs</h3>
               <p className="text-sm text-foreground/80">Using a Gemini or Anthropic API key allows Publicat to summarize dozens of complex papers in parallel in seconds with state-of-the-art accuracy.</p>
             </div>
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <h3 className="font-semibold mb-1">Local (Ollama)</h3>
-              <p className="text-sm text-muted-foreground">If you provide no API keys, Publicat falls back to your local Ollama installation. This is highly private, but generating 20+ scientific summaries sequentially takes significantly longer.</p>
+              <p className="text-sm text-muted-foreground">If you provide no API keys, Publicat falls back to a local model. This is highly private, but generating many scientific summaries sequentially can take significantly longer, depending on your local hardware.</p>
             </div>
           </div>
         </section>
