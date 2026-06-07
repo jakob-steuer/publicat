@@ -22,7 +22,7 @@ def main():
     backend_dir = os.path.join(root_dir, "backend")
 
     print("="*50)
-    print("🚀 Starting Publikater...")
+    print("🚀 Starting Publicat...")
     print("="*50)
 
     # 1. Build Frontend
@@ -83,7 +83,7 @@ def main():
             server_process.terminate()
             sys.exit(1)
 
-    print("\n✅ Publikater is ready!")
+    print("\n✅ Publicat is ready!")
     url = f"http://localhost:{port}"
     print(f"Opening {url} in your browser...")
     webbrowser.open(url)
@@ -93,7 +93,7 @@ def main():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nShutting down Publikater...")
+        print("\nShutting down Publicat...")
         if 'server_process' in locals():
             server_process.terminate()
             server_process.wait()

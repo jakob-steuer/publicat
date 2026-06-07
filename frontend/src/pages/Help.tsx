@@ -17,7 +17,7 @@ export default function Help() {
             1. Using the Feed (Inbox Zero)
           </h2>
           <p className="text-foreground/80 mb-4 leading-relaxed">
-            Publikater uses a simple tri-state system to help you quickly process new papers and achieve "Inbox Zero".
+            Publicat uses a simple tri-state system to help you quickly process new papers and achieve "Inbox Zero".
           </p>
           <div className="grid sm:grid-cols-3 gap-4">
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
@@ -105,14 +105,14 @@ export default function Help() {
             5. Semantic Scholar API Key
           </h2>
           <p className="text-foreground/80 leading-relaxed mb-4">
-            Publikater relies heavily on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. Without a key, your paper fetching may fail with "Too Many Requests" errors.
+            Publicat relies heavily on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. <strong className="text-red-500 dark:text-red-400">Without a key, your paper fetching will likely fail with "Too Many Requests" errors. This is highly recommended.</strong>
           </p>
           <div className="bg-primary/5 border border-primary/20 p-5 rounded-xl">
-            <h3 className="font-semibold text-primary mb-2">How to get your free key (Takes 30 seconds):</h3>
+            <h3 className="font-semibold text-primary mb-2">How to get your free key:</h3>
             <ol className="list-decimal pl-5 space-y-1 text-sm text-foreground/80">
               <li>Go to <a href="https://www.semanticscholar.org/product/api" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">semanticscholar.org/product/api</a></li>
-              <li>Click "Get an API Key" and fill out the quick form.</li>
-              <li>Once you receive your key, paste it into the <strong>Settings</strong> page inside the Publikater app.</li>
+              <li>Click "Get an API Key" and fill out the form.</li>
+              <li>Once you receive your key, paste it into the <strong>Settings</strong> page inside the Publicat app.</li>
             </ol>
           </div>
         </section>
@@ -123,16 +123,16 @@ export default function Help() {
             6. Local vs. Cloud AI
           </h2>
           <p className="text-foreground/80 leading-relaxed mb-4">
-            Publikater runs all semantic matching and paper scoring <strong>100% locally</strong> on your machine. However, for generating the actual text summaries, you can configure your LLM preference in the <Link to="/settings" className="text-primary hover:underline">Settings</Link> page.
+            Publicat runs all semantic matching and paper scoring <strong>100% locally</strong> on your machine. However, for generating the actual text summaries, you can configure your LLM preference in the <Link to="/settings" className="text-primary hover:underline">Settings</Link> page.
           </p>
           <div className="grid md:grid-cols-2 gap-4">
             <div className="bg-primary/5 border border-primary/20 p-4 rounded-xl">
               <h3 className="font-semibold mb-1 text-primary">Cloud APIs (Recommended)</h3>
-              <p className="text-sm text-foreground/80">Using a Gemini or Anthropic API key allows Publikater to summarize dozens of complex papers in parallel in seconds with state-of-the-art accuracy.</p>
+              <p className="text-sm text-foreground/80">Using a Gemini or Anthropic API key allows Publicat to summarize dozens of complex papers in parallel in seconds with state-of-the-art accuracy.</p>
             </div>
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <h3 className="font-semibold mb-1">Local (Ollama)</h3>
-              <p className="text-sm text-muted-foreground">If you provide no API keys, Publikater falls back to your local Ollama installation. This is highly private, but generating 20+ scientific summaries sequentially takes significantly longer.</p>
+              <p className="text-sm text-muted-foreground">If you provide no API keys, Publicat falls back to your local Ollama installation. This is highly private, but generating 20+ scientific summaries sequentially takes significantly longer.</p>
             </div>
           </div>
         </section>

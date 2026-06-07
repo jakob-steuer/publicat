@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 echo "========================================================"
-echo "  Publikater - Mac/Linux Installer & Launcher"
+echo "  Publicat - Mac/Linux Installer & Launcher"
 echo "========================================================"
 
 # Exit on error
@@ -31,5 +31,5 @@ uv sync
 cd ..
 
 # Launch the app using uv's managed python
-echo "[INFO] Launching Publikater..."
+echo "[INFO] Launching Publicat..."
 uv run --project backend python launcher.py "$@"

@@ -235,10 +235,15 @@ export default function Feed({ showRead, showPreprints, searchQuery, isDark, tog
         <div className="space-y-12">
           {topics?.length === 0 ? (
             <div className="py-20 px-4 text-center border-2 border-dashed rounded-xl bg-card">
-              <h3 className="text-2xl font-bold mb-4">Welcome to Publikater! 👋</h3>
-              <p className="text-muted-foreground mb-6 max-w-md mx-auto">
-                You don't have any topics set up yet. Publikater needs to know what you're interested in before it can fetch and summarize papers for you.
+              <h3 className="text-2xl font-bold mb-4">Welcome to Publicat! 👋</h3>
+              <p className="text-muted-foreground mb-4 max-w-md mx-auto">
+                You don't have any topics set up yet. Publicat needs to know what you're interested in before it can fetch and summarize papers for you.
               </p>
+              <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 rounded-lg p-4 mb-6 max-w-md mx-auto text-left">
+                <p className="text-sm text-red-800 dark:text-red-300">
+                  <span className="font-bold">Highly Recommended:</span> Before creating a topic, please add a free Semantic Scholar API key in the Settings page. Without it, the app will likely hit aggressive rate limits and fail to fetch papers.
+                </p>
+              </div>
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link 
                   to="/settings" 

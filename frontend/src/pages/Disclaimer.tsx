@@ -5,22 +5,22 @@ export default function Disclaimer() {
     <div className="max-w-4xl mx-auto p-4 space-y-8 pb-20">
       <div>
         <h1 className="text-3xl font-bold tracking-tight mb-2">Impressum & Disclaimer</h1>
-        <p className="text-muted-foreground">Legal information and disclaimers regarding the use of Publikater.</p>
+        <p className="text-muted-foreground">Legal information and disclaimers regarding the use of Publicat.</p>
       </div>
 
       <div className="space-y-6 text-sm text-foreground/80 leading-relaxed">
         <section className="bg-card p-6 rounded-lg border shadow-sm">
           <h2 className="text-xl font-semibold mb-3 text-foreground">Copyright Information</h2>
           <p>
-            © {new Date().getFullYear()} Publikater AI Research Feed. All rights reserved. 
-            Publikater is a personalized research feed application. The software and its native components are provided "as is".
+            © {new Date().getFullYear()} Publicat AI Research Feed. All rights reserved. 
+            Publicat is a personalized research feed application. The software and its native components are provided "as is".
           </p>
         </section>
 
         <section className="bg-card p-6 rounded-lg border shadow-sm">
           <h2 className="text-xl font-semibold mb-3 text-foreground">Content Disclaimer</h2>
           <p className="mb-4">
-            Publikater aggregates academic papers, preprints, and research articles from third-party sources (primarily Semantic Scholar). 
+            Publicat aggregates academic papers, preprints, and research articles from third-party sources (primarily Semantic Scholar). 
             We do not claim ownership of the papers, abstracts, or metadata retrieved by the system.
           </p>
           <ul className="list-disc pl-5 space-y-2">
@@ -32,7 +32,7 @@ export default function Disclaimer() {
         <section className="bg-card p-6 rounded-lg border shadow-sm">
           <h2 className="text-xl font-semibold mb-3 text-foreground">Data Privacy & API Usage</h2>
           <p className="mb-4">
-            Publikater runs locally. Your data, including followed topics, authors, and read history, is stored entirely on your local machine in an SQLite database.
+            Publicat runs locally. Your data, including followed topics, authors, and read history, is stored entirely on your local machine in an SQLite database.
           </p>
           <p>
             If you configure Cloud APIs (e.g., Gemini, Anthropic), abstract texts are sent to these providers to generate summaries. Please review their respective privacy policies. If no API key is provided, all LLM processing happens locally on your machine via Ollama.

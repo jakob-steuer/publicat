@@ -61,9 +61,9 @@ function Sidebar({ isMobileOpen, onClose, showRead, setShowRead, showPreprints, 
       <aside className={`md:sticky md:top-0 md:translate-x-0 ${baseClasses} ${mobileClasses}`}>
         <div className="px-6 mb-8 flex items-center justify-between gap-3 mt-6">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="Publikater Logo" className="h-16 w-auto object-contain" />
+            <img src="/logo.png" alt="Publicat Logo" className="h-16 w-auto object-contain" />
             <div>
-              <h1 className="text-2xl font-bold tracking-tight text-primary leading-none">PUBLIKATER</h1>
+              <h1 className="text-2xl font-bold tracking-tight text-primary leading-none">PUBLICAT</h1>
               <p className="text-[10px] text-muted-foreground mt-1 tracking-wide uppercase font-semibold">AI Research Feed</p>
             </div>
           </div>

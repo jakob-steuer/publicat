@@ -1,16 +1,16 @@
 <div align="center">
-  <img src="./publikater.png" width="400" alt="Publikater Logo">
+  <img src="./publicat_logo.png" width="400" alt="Publicat Logo">
   
   *A personalized AI-powered research feed that cuts through the noise and delivers only the methodology and discoveries you actually care about.*
 </div>
 
 ---
 
-**PUBLIKATER** automatically ingests, scores, and summarizes scientific papers based on your highly specific topics of interest. Stay on top of the latest research without drowning in generic feeds.
+**PUBLICAT** automatically ingests, scores, and summarizes scientific papers based on your highly specific topics of interest. Stay on top of the latest research without drowning in generic feeds.
 
 ## Quick Start & Installation
 
-There are two ways to run Publikater: the **1-Click Launcher** (recommended for most users) or via manual command line setup.
+There are two ways to run Publicat: the **1-Click Launcher** (recommended for most users) or via manual command line setup.
 
 ### The 1-Click Launcher Way
 
@@ -62,7 +62,7 @@ Make sure you have Node.js (v18+) and Python (3.11+) with `uv` installed.
 
 ## Tutorial: Setting Up Your First Topic
 
-Publikater uses advanced AI to semantically match papers to your topics. The better you describe your topic, the better your feed will be!
+Publicat uses advanced AI to semantically match papers to your topics. The better you describe your topic, the better your feed will be!
 
 **Pro Tip for Topic Descriptions:** Don't use a generic list of outcomes (like "predicts 3D structures"). Focus heavily on the *methodology* and the core concepts you want to read about.
 
@@ -75,13 +75,13 @@ If you're unsure how to describe your topic, ask an LLM of your choice:
 - **Description:** Applications of large language models (LLMs), transformer architectures, foundation models, and self-supervised deep learning architectures applied to biological data.
 - **Keywords:** Foundation Models, Protein Language Models, RNA Language Models, DNA Language Models
 
-> **⚠️ Note:** When you create a new topic, Publikater will immediately start fetching and scoring papers from the last 30 days. This **first sync may take a few minutes** depending on your hardware and network speed.
+> **⚠️ Note:** When you create a new topic, Publicat will immediately start fetching and scoring papers from the last 30 days. This **first sync may take a few minutes** depending on your hardware and network speed.
 
 ---
 
 ## Using the Interface
 
-Publikater uses a simple, swipe-like tri-state system to help you reach Inbox Zero.
+Publicat uses a simple, swipe-like tri-state system to help you reach Inbox Zero.
 
 - ⭐ **Star:** Save this paper. It will be permanently kept in your "Starred" feed for future reference.
 - ✅ **Read (Acknowledge):** You've seen this paper, but don't need to save it. It will be hidden from your main feed unless you toggle "Show Read".
@@ -92,7 +92,7 @@ Publikater uses a simple, swipe-like tri-state system to help you reach Inbox Ze
 - **Export Citations:** Easily export your starred papers to share or use in manuscripts.
 
 ### Zotero Integration
-Every topic in Publikater features a dedicated "Zotero RSS URL" button at the top of the dashboard.
+Every topic in Publicat features a dedicated "Zotero RSS URL" button at the top of the dashboard.
 
 **How it works:**
 1. Click the button to copy your unique topic URL.
@@ -105,22 +105,23 @@ Every topic in Publikater features a dedicated "Zotero RSS URL" button at the to
 
 ## Semantic Scholar API Key (Highly Recommended)
 
-Publikater relies on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. **Without a key, your paper fetching may fail with "Too Many Requests" errors.**
+> [!IMPORTANT]
+> Publicat relies heavily on the Semantic Scholar API to discover new papers. While the app will run without an API key, the unauthenticated tier is heavily rate-limited globally. **Without a key, your paper fetching will likely fail with "Too Many Requests" errors.**
 
-**How to get your free key (Takes 30 seconds):**
+**How to get your free key:**
 1. Go to [semanticscholar.org/product/api](https://www.semanticscholar.org/product/api)
-2. Click "Get an API Key" and fill out the quick form.
-3. Once you have your key, paste it into the **Settings** page inside the Publikater app.
+2. Click "Get an API Key" and fill out the form.
+3. Once you have your key, paste it into the **Settings** page inside the Publicat app.
 
 ---
 
 ## Local vs. Cloud AI
 
-Publikater relies heavily on AI. All semantic embedding and paper matching runs **100% locally** on your machine using optimized PyTorch models. 
+Publicat relies heavily on AI. All semantic embedding and paper matching runs **100% locally** on your machine using optimized PyTorch models. 
 
 For generating the actual text summaries, you have a choice (configurable in Settings):
-- **Cloud APIs (Recommended):** By entering a Gemini or Anthropic API key, Publikater can summarize dozens of complex papers in parallel in seconds with state-of-the-art accuracy.
-- **Local (Ollama):** If you provide no API keys, Publikater automatically falls back to your local Ollama installation. While highly private, generating 20+ scientific summaries sequentially on a local 8B model will take significantly longer and requires powerful hardware.
+- **Cloud APIs (Recommended):** By entering a Gemini or Anthropic API key, Publicat can summarize dozens of complex papers in parallel in seconds with state-of-the-art accuracy.
+- **Local (Ollama):** If you provide no API keys, Publicat automatically falls back to your local Ollama installation. While highly private, generating 20+ scientific summaries sequentially on a local 8B model will take significantly longer and requires powerful hardware.
 
 ---
 

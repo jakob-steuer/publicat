@@ -366,7 +366,14 @@ export default function Settings() {
         
         <form onSubmit={handleSaveConfig} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1">Semantic Scholar API Key (Recommended)</label>
+            <label className="block text-sm font-medium mb-1">
+              Semantic Scholar API Key
+            </label>
+            {!s2Key && (
+              <p className="text-xs text-red-600 dark:text-red-400 font-bold mb-2">
+                Highly Recommended: Without this key, fetching will likely fail due to rate limits.
+              </p>
+            )}
             <input 
               type="password" 
               value={s2Key}

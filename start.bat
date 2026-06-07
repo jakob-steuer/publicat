@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 echo ========================================================
-echo   Publikater - Windows Installer ^& Launcher
+echo   Publicat - Windows Installer ^& Launcher
 echo ========================================================
 
 :: Check for uv
@@ -37,7 +37,7 @@ if %ERRORLEVEL% neq 0 (
 cd ..
 
 :: Launch the app using uv's managed python
-echo [INFO] Launching Publikater...
+echo [INFO] Launching Publicat...
 uv run --project backend python launcher.py %*
 
 pause
