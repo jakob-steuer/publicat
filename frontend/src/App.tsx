@@ -145,9 +145,9 @@ function Sidebar({ isMobileOpen, onClose, showRead, setShowRead, showPreprints, 
             <NavLink to="/disclaimer" onClick={onClose} className={({ isActive }) => `text-[11px] hover:text-primary transition-colors flex items-center gap-2 ${isActive ? 'text-primary font-medium' : 'text-muted-foreground'}`}>
               ⚖️ Impressum & Disclaimer
             </NavLink>
-            <div className="mt-6 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors flex items-center gap-2">
-              Powered by Semantic Scholar
-            </div>
+            <a href="https://www.semanticscholar.org" target="_blank" rel="noopener noreferrer" className="mt-6 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors flex items-center gap-2">
+              Powered by Semantic Scholar ↗
+            </a>
           </div>
         </div>
       </aside>
