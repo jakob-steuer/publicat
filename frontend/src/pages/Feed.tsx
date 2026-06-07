@@ -266,7 +266,6 @@ export default function Feed({ showRead, showPreprints, searchQuery, isDark, tog
           {renderSection("Extracted Tools", "🛠️", dashboard?.tools, "tools")}
           {renderSection("This Week", "📅", dashboard?.this_week, "thisweek")}
           {renderSection("This Month", "📚", dashboard?.this_month, "thismonth")}
-          {renderSection("Trending", "📈", dashboard?.trending, "trending")}
           {renderSection("Starred", "⭐", dashboard?.starred, "starred")}
 
           {/* Fallback for unhandled sections */}

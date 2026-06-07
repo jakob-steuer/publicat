@@ -56,12 +56,11 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
     
     recent_query = base_query.filter(Item.published_at >= eight_weeks_ago)
     
-    # 1. Do Not Miss
-    do_not_miss_query = recent_query.filter(Item.tools.isnot(None))
+    # 1. Do Not Miss (Score >= 0.90)
     if topic_id:
-        do_not_miss_query = do_not_miss_query.order_by(desc(ItemScore.final_score), desc(Item.published_at))
+        do_not_miss_query = recent_query.filter(ItemScore.final_score >= 0.90).order_by(desc(ItemScore.final_score), desc(Item.published_at))
     else:
-        do_not_miss_query = do_not_miss_query.order_by(desc('final_score'), desc(Item.published_at))
+        do_not_miss_query = recent_query.having(func.max(ItemScore.final_score) >= 0.90).order_by(desc('final_score'), desc(Item.published_at))
     do_not_miss = [serialize_item(i[0], i[1]) for i in do_not_miss_query.limit(50).all()]
     
     # 2. This Week
@@ -105,11 +104,7 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
             
         highlighted_authors = highlighted_authors[:50]
         
-    # 5. Trending (High Score)
-    trending = []
-    if topic_id:
-        trending_query = recent_query.filter(ItemScore.final_score >= 0.70).order_by(desc(ItemScore.final_score))
-        trending = [serialize_item(i[0], i[1]) for i in trending_query.limit(50).all()]
+
         
     # 6. Starred
     starred_query = base_query.filter(Item.is_starred)
@@ -131,7 +126,6 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
         "do_not_miss": do_not_miss,
         "this_week": this_week,
         "this_month": this_month,
-        "trending": trending,
         "highlighted_authors": highlighted_authors,
         "starred": starred,
         "tools": tools_items
