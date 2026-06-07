@@ -243,7 +243,15 @@ export function ItemCard({
       <div className="flex justify-between items-stretch mt-2 pt-3 border-t border-border/50">
         <div className="flex flex-col justify-center text-[11px] font-medium tracking-wide uppercase text-muted-foreground gap-1">
           <span>{new Date(item.published_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric', year: 'numeric'})}</span>
-          <span className="text-foreground/70 line-clamp-1 pr-2" title={item.venue || item.source}>{item.venue || item.source}</span>
+          <a 
+            href={item.doi ? `https://doi.org/${item.doi}` : item.url} 
+            target="_blank" 
+            rel="noopener noreferrer" 
+            className="text-foreground/70 hover:text-primary hover:underline line-clamp-1 pr-2" 
+            title={item.venue || item.source}
+          >
+            {item.venue || item.source}
+          </a>
         </div>
         <div className="flex items-stretch gap-2 shrink-0">
           {item.is_open_access && item.open_access_pdf_url && (
