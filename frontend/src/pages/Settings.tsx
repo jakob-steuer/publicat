@@ -3,6 +3,7 @@ import axios from 'axios'
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
 import type { Topic, Follow } from '../types'
+import { EditTopicModal } from '../components/EditTopicModal'
 
 interface AuthorResult {
   authorId: string | null;
@@ -38,6 +39,11 @@ export default function Settings() {
   const [description, setDescription] = useState('')
   const [keywords, setKeywords] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  
+  // Edit Topic state
+  const [editingTopic, setEditingTopic] = useState<Topic | null>(null)
+  const [isEditingModalOpen, setIsEditingModalOpen] = useState(false)
+  const [isUpdatingTopic, setIsUpdatingTopic] = useState(false)
 
   // Config state
   const [geminiKey, setGeminiKey] = useState('')
@@ -139,6 +145,23 @@ export default function Settings() {
     }
   })
 
+  const updateTopic = useMutation({
+    mutationFn: async ({ id, name, description, keywords }: { id: string, name: string, description: string, keywords: string }) => {
+      return axios.put(`http://localhost:8001/topics/${id}`, { name, description, keywords: keywords || undefined })
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['topics'] })
+      setIsUpdatingTopic(false)
+      setIsEditingModalOpen(false)
+      setEditingTopic(null)
+    },
+  })
+
+  const handleEditTopicSave = (id: string, name: string, description: string, keywords: string) => {
+    setIsUpdatingTopic(true)
+    updateTopic.mutate({ id, name, description, keywords })
+  }
+
   const saveSettings = useMutation({
     mutationFn: async (newSettings: { gemini_api_key?: string, anthropic_api_key?: string, s2_api_key?: string, anthropic_budget_limit?: number }) => {
       return axios.post('http://localhost:8001/settings/', newSettings)
@@ -205,12 +228,21 @@ export default function Settings() {
                   <p className="text-sm text-muted-foreground">{topic.description}</p>
                   {topic.keywords && <p className="text-xs text-primary mt-1 font-semibold">Keywords: {topic.keywords}</p>}
                 </div>
-                <button 
-                  onClick={() => deleteTopic.mutate(topic.id)}
-                  className="text-destructive hover:bg-destructive/10 px-3 py-1 rounded transition-colors"
-                >
-                  Delete
-                </button>
+                  <button 
+                    onClick={() => {
+                      setEditingTopic(topic)
+                      setIsEditingModalOpen(true)
+                    }}
+                    className="text-primary hover:bg-primary/10 px-3 py-1 rounded transition-colors mr-2"
+                  >
+                    Edit
+                  </button>
+                  <button 
+                    onClick={() => deleteTopic.mutate(topic.id)}
+                    className="text-destructive hover:bg-destructive/10 px-3 py-1 rounded transition-colors"
+                  >
+                    Delete
+                  </button>
               </div>
             ))}
             {topics?.length === 0 && <p className="text-muted-foreground text-sm">No topics added yet.</p>}
@@ -458,6 +490,13 @@ export default function Settings() {
           Clear Unstarred Inbox
         </button>
       </div>
+      <EditTopicModal 
+        isOpen={isEditingModalOpen}
+        onClose={() => setIsEditingModalOpen(false)}
+        topic={editingTopic}
+        onSave={handleEditTopicSave}
+        isSaving={isUpdatingTopic}
+      />
     </div>
   )
 }

@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from src.database import get_db
 from src.models.topic import Topic
-from src.schemas.topic import TopicCreate, TopicResponse
+from src.schemas.topic import TopicCreate, TopicUpdate, TopicResponse
 from src.embeddings import get_embedding
 
 router = APIRouter(prefix="/topics", tags=["topics"])
@@ -143,6 +143,115 @@ def create_topic(topic_in: TopicCreate, background_tasks: BackgroundTasks, db: S
 def read_topics(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     topics = db.query(Topic).filter(Topic.user_id == "1").offset(skip).limit(limit).all()
     return topics
+
+@router.put("/{topic_id}", response_model=TopicResponse)
+def update_topic(topic_id: str, topic_in: TopicUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    topic = db.query(Topic).filter(Topic.id == topic_id, Topic.user_id == "1").first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+        
+    # Update fields
+    if topic_in.name is not None:
+        topic.name = topic_in.name
+    if topic_in.description is not None:
+        topic.description = topic_in.description
+    if topic_in.keywords is not None:
+        topic.keywords = topic_in.keywords
+        
+    # Generate new embedding
+    text_to_embed = f"{topic.name}. {topic.description}"
+    if topic.keywords:
+        text_to_embed += f". Keywords: {topic.keywords}"
+    topic.embedding = get_embedding(text_to_embed)
+    
+    db.commit()
+    db.refresh(topic)
+    
+    # Background task to rescore all existing items against the updated topic
+    def rescore_topic_task(t_id: str):
+        from src.database import SessionLocal
+        from src.models.item import Item
+        from src.models.item_score import ItemScore
+        from src.models.follow import Follow
+        from src.embeddings import compute_cosine_similarity
+        
+        db_bg = SessionLocal()
+        try:
+            db_topic = db_bg.query(Topic).filter(Topic.id == t_id).first()
+            if not db_topic:
+                return
+                
+            # Clear old scores for this topic
+            db_bg.query(ItemScore).filter(ItemScore.topic_id == t_id).delete()
+            db_bg.commit()
+            
+            items = db_bg.query(Item).all()
+            follows = db_bg.query(Follow).all()
+            author_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "author"}
+            venue_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "venue"}
+            
+            for item in items:
+                if item.embedding:
+                    item_emb = item.embedding
+                else:
+                    item_text = f"{item.title}. {item.abstract}"
+                    item_emb = get_embedding(item_text)
+                    
+                raw_sim = compute_cosine_similarity(item_emb, db_topic.embedding)
+                sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
+                
+                boost = 0.0
+                reasons = []
+                item_authors = [a.lower() for a in item.authors] if item.authors else []
+                for author, boost_val in author_follows.items():
+                    if any(author in a for a in item_authors):
+                        boost += boost_val
+                        reasons.append(f"Followed author boost (+{boost_val})")
+                        
+                if item.venue:
+                    item_venue = item.venue.lower()
+                    for venue, boost_val in venue_follows.items():
+                        if venue in item_venue:
+                            boost += boost_val
+                            reasons.append(f"Followed venue boost (+{boost_val})")
+                            
+                topic_boost = 0.0
+                topic_specific_reasons = []
+                if db_topic.keywords:
+                    kws = [k.strip().lower() for k in db_topic.keywords.split(",")]
+                    paper_title = item.title.lower() if item.title else ""
+                    paper_abs = item.abstract.lower() if item.abstract else ""
+                    for kw in kws:
+                        if not kw: continue
+                        kw_base = kw[:-1] if kw.endswith('s') else kw
+                        if kw_base in paper_title:
+                            topic_boost += 0.15
+                            topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
+                        elif kw_base in paper_abs:
+                            topic_boost += 0.10
+                            topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
+
+                final_score = min(1.0, sim + boost + topic_boost)
+                
+                if final_score >= 0.20 or boost > 0.0 or topic_boost > 0.0:
+                    combined_reasons = [f"Semantic match to '{db_topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
+                    score = ItemScore(
+                        item_id=item.id,
+                        topic_id=db_topic.id,
+                        semantic_score=sim,
+                        final_score=final_score,
+                        reasons=combined_reasons
+                    )
+                    db_bg.add(score)
+            db_bg.commit()
+            print(f"Rescoring for topic {db_topic.name} complete!")
+        except Exception as e:
+            print(f"Error rescoring topic {t_id}: {e}")
+        finally:
+            db_bg.close()
+
+    background_tasks.add_task(rescore_topic_task, topic.id)
+    return topic
 
 @router.delete("/{topic_id}")
 def delete_topic(topic_id: str, db: Session = Depends(get_db)):
