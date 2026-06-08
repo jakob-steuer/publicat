@@ -36,6 +36,12 @@ export default function Help() {
               <p className="text-sm text-muted-foreground">Not relevant. Hides the paper entirely so it never clutters your feed again.</p>
             </div>
           </div>
+          <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 mt-4">
+            <h3 className="font-semibold text-primary mb-1">Automatic Database Cleanup</h3>
+            <p className="text-sm text-foreground/80">
+              To prevent your local database from becoming bloated, any publication older than 60 days that you haven't explicitly starred is automatically removed during background syncs. Starred papers are kept forever!
+            </p>
+          </div>
         </section>
 
         {/* Section 2: Setting up topics */}
