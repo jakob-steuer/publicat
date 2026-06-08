@@ -155,6 +155,11 @@ export default function Settings() {
       setIsEditingModalOpen(false)
       setEditingTopic(null)
     },
+    onError: (err) => {
+      console.error(err)
+      setIsUpdatingTopic(false)
+      alert("Failed to update topic. Did you forget to restart the backend terminal? (start.bat / start.sh)")
+    }
   })
 
   const handleEditTopicSave = (id: string, name: string, description: string, keywords: string) => {
