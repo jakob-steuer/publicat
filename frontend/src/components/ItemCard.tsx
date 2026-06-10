@@ -17,6 +17,7 @@ interface ItemCardProps {
   unacknowledgeItem: UseMutationResult<any, Error, string, unknown>;
   hideItem: UseMutationResult<any, Error, string, unknown>;
   unhideItem?: UseMutationResult<any, Error, string, unknown>;
+  voteItem?: UseMutationResult<any, Error, { id: string, vote: number }, unknown>;
 }
 
 export function ItemCard({
@@ -31,7 +32,8 @@ export function ItemCard({
   acknowledgeItem,
   unacknowledgeItem,
   hideItem,
-  unhideItem
+  unhideItem,
+  voteItem
 }: ItemCardProps) {
   const [expandedAuthors, setExpandedAuthors] = useState(false)
   const isLongAuthorList = (item.author_details?.length ?? item.authors?.length ?? 0) > 8
@@ -62,46 +64,81 @@ export function ItemCard({
           onChange={() => toggleSelect(item.id)}
           title="Select for export"
         />
-        <button 
-          onClick={() => item.is_starred ? unstarItem.mutate(item.id) : starItem.mutate(item.id)}
-          className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full"
-          title={item.is_starred ? "Unstar" : "Star"}
-        >
-          {item.is_starred ? '⭐' : '☆'}
-        </button>
-        {!item.is_acknowledged ? (
-          <button 
-            onClick={() => acknowledgeItem.mutate(item.id)}
-            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-green-600 dark:text-green-400 font-bold"
-            title="Mark as Read"
-          >
-            ✓
-          </button>
+        {voteItem ? (
+          <>
+            <button 
+              onClick={() => voteItem.mutate({ id: item.id, vote: 2 })}
+              className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-yellow-500 font-bold ml-1 flex items-center justify-center w-7 h-7 shadow-sm border border-yellow-200 dark:border-yellow-900"
+              title="Star / Super Upvote (+2)"
+            >
+              ⭐
+            </button>
+            <button 
+              onClick={() => voteItem.mutate({ id: item.id, vote: 1 })}
+              className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-green-500 font-bold ml-1 flex items-center justify-center w-7 h-7 shadow-sm border border-green-200 dark:border-green-900"
+              title="Upvote (+1)"
+            >
+              👍
+            </button>
+            <button 
+              onClick={() => voteItem.mutate({ id: item.id, vote: 0 })}
+              className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-blue-500 font-bold ml-1 flex items-center justify-center w-7 h-7 shadow-sm border border-blue-200 dark:border-blue-900"
+              title="Neutral / Read (0)"
+            >
+              👁️
+            </button>
+            <button 
+              onClick={() => voteItem.mutate({ id: item.id, vote: -1 })}
+              className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-red-500 font-bold ml-1 flex items-center justify-center w-7 h-7 shadow-sm border border-red-200 dark:border-red-900"
+              title="Downvote / Discard (-1)"
+            >
+              👎
+            </button>
+          </>
         ) : (
-          <button 
-            onClick={() => unacknowledgeItem.mutate(item.id)}
-            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-muted-foreground font-bold"
-            title="Mark as Unread"
-          >
-            ↩
-          </button>
-        )}
-        {item.is_hidden && unhideItem ? (
-          <button 
-            onClick={() => unhideItem.mutate(item.id)}
-            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-blue-500 font-bold ml-1"
-            title="Recover / Unhide"
-          >
-            ↩️
-          </button>
-        ) : (
-          <button 
-            onClick={() => hideItem.mutate(item.id)}
-            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-red-500 font-bold ml-1 text-sm flex items-center justify-center w-7 h-7"
-            title="Dismiss / Hide"
-          >
-            ✕
-          </button>
+          <>
+            <button 
+              onClick={() => item.is_starred ? unstarItem.mutate(item.id) : starItem.mutate(item.id)}
+              className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full"
+              title={item.is_starred ? "Unstar" : "Star"}
+            >
+              {item.is_starred ? '⭐' : '☆'}
+            </button>
+            {!item.is_acknowledged ? (
+              <button 
+                onClick={() => acknowledgeItem.mutate(item.id)}
+                className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-green-600 dark:text-green-400 font-bold"
+                title="Mark as Read"
+              >
+                ✓
+              </button>
+            ) : (
+              <button 
+                onClick={() => unacknowledgeItem.mutate(item.id)}
+                className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-muted-foreground font-bold"
+                title="Mark as Unread"
+              >
+                ↩
+              </button>
+            )}
+            {item.is_hidden && unhideItem ? (
+              <button 
+                onClick={() => unhideItem.mutate(item.id)}
+                className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-blue-500 font-bold ml-1"
+                title="Recover / Unhide"
+              >
+                ↩️
+              </button>
+            ) : (
+              <button 
+                onClick={() => hideItem.mutate(item.id)}
+                className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-red-500 font-bold ml-1 text-sm flex items-center justify-center w-7 h-7"
+                title="Dismiss / Hide"
+              >
+                ✕
+              </button>
+            )}
+          </>
         )}
       </div>
       

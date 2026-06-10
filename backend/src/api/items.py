@@ -139,14 +139,34 @@ async def run_ingestion(db: Session, days_back: int = 3):
     author_follows = [(f.entity_value, f.display_name or f.entity_value, f.boost_value) for f in follows if f.entity_type == "author"]
     venue_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "venue"}
     
-    # Calculate Anti-Topic Vector
-    discarded_items = db.query(Item).filter(Item.is_hidden == True).all()
-    anti_vector = None
-    if discarded_items:
-        import numpy as np
-        vectors = [i.embedding for i in discarded_items if i.embedding and isinstance(i.embedding, list) and len(i.embedding) == 768]
-        if vectors:
-            anti_vector = np.mean(vectors, axis=0).tolist()
+    # Calculate Pro and Anti Vectors per Topic
+    from src.models.item_score import ItemScore
+    import numpy as np
+    
+    topic_vectors = {}
+    for topic in active_topics:
+        pro_vector = None
+        anti_vector = None
+        
+        # Pro items (vote >= 1)
+        pro_scores = db.query(ItemScore, Item).join(Item, ItemScore.item_id == Item.id).filter(
+            ItemScore.topic_id == topic.id,
+            ItemScore.user_vote >= 1
+        ).all()
+        pro_embs = [i[1].embedding for i in pro_scores if i[1].embedding and isinstance(i[1].embedding, list) and len(i[1].embedding) == 768]
+        if pro_embs:
+            pro_vector = np.mean(pro_embs, axis=0).tolist()
+            
+        # Anti items (vote == -1)
+        anti_scores = db.query(ItemScore, Item).join(Item, ItemScore.item_id == Item.id).filter(
+            ItemScore.topic_id == topic.id,
+            ItemScore.user_vote == -1
+        ).all()
+        anti_embs = [i[1].embedding for i in anti_scores if i[1].embedding and isinstance(i[1].embedding, list) and len(i[1].embedding) == 768]
+        if anti_embs:
+            anti_vector = np.mean(anti_embs, axis=0).tolist()
+            
+        topic_vectors[topic.id] = {"pro": pro_vector, "anti": anti_vector}
     
     total_papers = len(enriched_papers)
     for idx, paper in enumerate(enriched_papers):
@@ -272,7 +292,17 @@ async def run_ingestion(db: Session, days_back: int = 3):
                 
                 topic_specific_reasons = []
                 
-                # Apply Negative Feedback Penalty
+                pro_vector = topic_vectors.get(topic.id, {}).get("pro")
+                anti_vector = topic_vectors.get(topic.id, {}).get("anti")
+                
+                # Apply Active Learning (Pro/Anti Vectors)
+                if pro_vector:
+                    pro_sim = compute_cosine_similarity(item_emb, pro_vector)
+                    if pro_sim > 0.80:
+                        boost_amount = min(0.3, (pro_sim - 0.80) * 2.0)
+                        sim = min(1.0, sim + boost_amount)
+                        topic_specific_reasons.append(f"Pro-topic similarity (+{boost_amount:.2f})")
+                        
                 if anti_vector:
                     anti_sim = compute_cosine_similarity(item_emb, anti_vector)
                     if anti_sim > 0.80:
@@ -580,5 +610,46 @@ def unhide_item(item_id: str, db: Session = Depends(get_db)):
         return {"status": "error", "message": "Item not found"}
     
     item.is_hidden = False
+    db.commit()
+    return {"status": "success"}
+
+from pydantic import BaseModel
+from typing import Optional
+
+class VoteRequest(BaseModel):
+    topic_id: Optional[str] = None
+    vote: int # 2: Star, 1: Up, 0: Neutral, -1: Down
+
+@router.post("/{item_id}/vote", response_model=dict)
+def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)):
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if not item:
+        return {"status": "error", "message": "Item not found"}
+        
+    # Set acknowledged so it hides globally
+    item.is_acknowledged = True
+    
+    # If Star (2), also set is_starred globally for Zotero
+    if vote_req.vote == 2:
+        item.is_starred = True
+    elif vote_req.vote == -1:
+        # Also set is_hidden globally
+        item.is_hidden = True
+        item.is_starred = False
+    elif vote_req.vote == 1 or vote_req.vote == 0:
+        # Normal read or upvote
+        item.is_hidden = False
+        
+    from src.models.item_score import ItemScore
+    
+    if vote_req.topic_id:
+        score = db.query(ItemScore).filter(ItemScore.item_id == item_id, ItemScore.topic_id == vote_req.topic_id).first()
+        if score:
+            score.user_vote = vote_req.vote
+    else:
+        scores = db.query(ItemScore).filter(ItemScore.item_id == item_id).all()
+        for score in scores:
+            score.user_vote = vote_req.vote
+            
     db.commit()
     return {"status": "success"}

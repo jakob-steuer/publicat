@@ -45,6 +45,8 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
             aid = author_id.replace("AUTHOR_ID:", "")
             base_query = base_query.filter(Item.raw_metadata_json.like(f'%"authorId": "{aid}"%'))
             
+    unfiltered_base_query = base_query
+    
     if not show_acknowledged:
         base_query = base_query.filter(Item.is_acknowledged == False)
         
@@ -110,7 +112,7 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
 
         
     # 6. Starred
-    starred_query = base_query.filter(Item.is_starred)
+    starred_query = unfiltered_base_query.filter(Item.is_starred)
     if topic_id:
         starred_query = starred_query.order_by(desc(ItemScore.final_score), desc(Item.published_at))
     else:

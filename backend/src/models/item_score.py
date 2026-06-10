@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Float, JSON, ForeignKey, PrimaryKeyConstraint
+from sqlalchemy import Column, String, Float, JSON, ForeignKey, PrimaryKeyConstraint, Integer
 from .base import Base
 
 class ItemScore(Base):
@@ -11,6 +11,7 @@ class ItemScore(Base):
     llm_relevance_score = Column(Float, nullable=True)
     follow_boost = Column(Float, nullable=False, default=0.0)
     final_score = Column(Float, nullable=False, default=0.0)
+    user_vote = Column(Integer, nullable=True) # 2: Star, 1: Up, 0: Neutral, -1: Down
     
     reasons = Column(JSON, nullable=False, default=list)
 

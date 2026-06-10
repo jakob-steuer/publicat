@@ -107,6 +107,13 @@ export default function Feed({ showRead, showPreprints, showDiscarded, searchQue
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
+  const voteItem = useMutation({
+    mutationFn: async ({ id, vote }: { id: string, vote: number }) => {
+      return axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: topicId || null, vote })
+    },
+    onSuccess: () => refetch()
+  })
+
 
 
   const handleSyncControl = async (action: 'pause' | 'resume' | 'abort') => {
@@ -172,6 +179,7 @@ export default function Feed({ showRead, showPreprints, showDiscarded, searchQue
       acknowledgeItem={acknowledgeItem}
       unacknowledgeItem={unacknowledgeItem}
       hideItem={hideItem}
+      voteItem={voteItem}
     />
   )
 
