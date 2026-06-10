@@ -90,13 +90,13 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
 
         <div className="px-4 space-y-1 mb-8">
           <NavLink to="/" end onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
-            🏠 All Topics
+            All Topics
           </NavLink>
           <NavLink to="/starred" onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
-            ⭐ Starred Library
+            Starred Library
           </NavLink>
           <NavLink to="/settings" onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
-            ⚙️ Settings
+            Settings
           </NavLink>
         </div>
 
@@ -156,10 +156,10 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
         <div className="mt-auto pb-6 px-6 space-y-4 pt-4">
           <div className="space-y-2">
             <NavLink to="/help" onClick={onClose} className={({ isActive }) => `text-[12px] hover:text-primary transition-colors flex items-center gap-2 ${isActive ? 'text-primary font-medium' : 'text-muted-foreground'}`}>
-              ❓ Help & Tutorial
+              Help & Tutorial
             </NavLink>
             <NavLink to="/disclaimer" onClick={onClose} className={({ isActive }) => `text-[11px] hover:text-primary transition-colors flex items-center gap-2 ${isActive ? 'text-primary font-medium' : 'text-muted-foreground'}`}>
-              ⚖️ Impressum & Disclaimer
+              Impressum & Disclaimer
             </NavLink>
             <a href="https://www.semanticscholar.org" target="_blank" rel="noopener noreferrer" className="mt-6 text-[10px] text-muted-foreground/60 hover:text-primary transition-colors flex items-center gap-2">
               Powered by Semantic Scholar ↗
@@ -171,7 +171,7 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
   )
 }
 
-function Layout({ children, showRead, setShowRead, showPreprints, setShowPreprints, showDiscarded, setShowDiscarded, searchQuery, setSearchQuery, minScore, setMinScore }: any) {
+function Layout({ children, showRated, setShowRated, showPreprints, setShowPreprints, searchQuery, setSearchQuery, minScore, setMinScore }: any) {
   const [isMobileOpen, setIsMobileOpen] = useState(false)
 
   return (

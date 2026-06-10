@@ -29,7 +29,7 @@ export function FilterBar({
     <div className="sticky top-0 bg-background/95 backdrop-blur z-10 pt-2 pb-4 border-b mb-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight mb-1">
+          <h1 className="text-2xl font-bold tracking-tight mb-1 mt-3">
             {authorId 
               ? `Author Dashboard: ${follows?.find((f: Follow) => f.entity_type === 'author' && f.entity_value === authorId)?.display_name || authorId.replace("AUTHOR_ID:", "").replace("ORCID:", "")}`
               : topicId 

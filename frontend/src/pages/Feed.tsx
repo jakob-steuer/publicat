@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { ItemCard } from '../components/ItemCard'
 import { FilterBar } from '../components/FilterBar'
+import { Star, ThumbsUp, Minus, ThumbsDown } from 'lucide-react'
 import type { Item, SyncProgress, Follow } from '../types'
 
 const fetchTopics = async () => {
@@ -307,31 +308,31 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => handleBulkVote(2)}
-                  className="hover:scale-110 transition-transform p-1 bg-yellow-50 text-yellow-500 rounded-full font-bold flex items-center justify-center w-7 h-7 shadow-sm border border-yellow-200 dark:bg-yellow-900/50 dark:border-yellow-900"
+                  className="hover:scale-110 transition-transform p-1 bg-background text-muted-foreground hover:text-yellow-500 rounded-full flex items-center justify-center w-8 h-8 shadow-sm border border-border/50"
                   title="Star / Super Upvote (+2)"
                 >
-                  ⭐
+                  <Star size={16} />
                 </button>
                 <button 
                   onClick={() => handleBulkVote(1)}
-                  className="hover:scale-110 transition-transform p-1 bg-green-50 text-green-500 rounded-full font-bold flex items-center justify-center w-7 h-7 shadow-sm border border-green-200 dark:bg-green-900/50 dark:border-green-900"
+                  className="hover:scale-110 transition-transform p-1 bg-background text-muted-foreground hover:text-green-500 rounded-full flex items-center justify-center w-8 h-8 shadow-sm border border-border/50"
                   title="Upvote (+1)"
                 >
-                  👍
+                  <ThumbsUp size={16} />
                 </button>
                 <button 
                   onClick={() => handleBulkVote(0)}
-                  className="hover:scale-110 transition-transform p-1 bg-blue-50 text-blue-500 rounded-full font-bold flex items-center justify-center w-7 h-7 shadow-sm border border-blue-200 dark:bg-blue-900/50 dark:border-blue-900"
+                  className="hover:scale-110 transition-transform p-1 bg-background text-muted-foreground hover:text-blue-500 rounded-full flex items-center justify-center w-8 h-8 shadow-sm border border-border/50"
                   title="Neutral / Read (0)"
                 >
-                  ➖
+                  <Minus size={16} />
                 </button>
                 <button 
                   onClick={() => handleBulkVote(-1)}
-                  className="hover:scale-110 transition-transform p-1 bg-red-50 text-red-500 rounded-full font-bold flex items-center justify-center w-7 h-7 shadow-sm border border-red-200 dark:bg-red-900/50 dark:border-red-900"
+                  className="hover:scale-110 transition-transform p-1 bg-background text-muted-foreground hover:text-red-500 rounded-full flex items-center justify-center w-8 h-8 shadow-sm border border-border/50"
                   title="Downvote / Discard (-1)"
                 >
-                  👎
+                  <ThumbsDown size={16} />
                 </button>
               </div>
 
