@@ -603,110 +603,107 @@ def clear_unstarred(db: Session = Depends(get_db)):
         db.rollback()
         return {"status": "error", "message": str(e)}
 
-    class BulkRescoreRequest(BaseModel):
-        item_ids: List[str]
+class BulkRescoreRequest(BaseModel):
+    item_ids: List[str]
 
-    @router.post("/bulk_rescore", response_model=dict)
-    def bulk_rescore(req: BulkRescoreRequest, db: Session = Depends(get_db)):
-        items = db.query(Item).filter(Item.id.in_(req.item_ids)).all()
-        if not items:
-            return {"status": "error", "message": "No items found"}
+@router.post("/bulk_rescore", response_model=dict)
+def bulk_rescore(req: BulkRescoreRequest, db: Session = Depends(get_db)):
+    items = db.query(Item).filter(Item.id.in_(req.item_ids)).all()
+    if not items:
+        return {"status": "error", "message": "No items found"}
+        
+    active_topics = db.query(Topic).filter(Topic.is_active == True).all()
+    topic_vectors = {}
+    for topic in active_topics:
+        topic_vectors[topic.id] = {}
+        pro_votes = db.query(Item.embedding).join(ItemScore).filter(
+            ItemScore.topic_id == topic.id,
+            ItemScore.user_vote > 0,
+            Item.embedding.isnot(None)
+        ).all()
+        if pro_votes:
+            vecs = [v[0] for v in pro_votes]
+            avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
+            magnitude = sum(x*x for x in avg_vec)**0.5
+            topic_vectors[topic.id]["pro"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
             
-        active_topics = db.query(Topic).filter(Topic.is_active == True).all()
-        if not active_topics:
-            return {"status": "error", "message": "No active topics found"}
+        anti_votes = db.query(Item.embedding).join(ItemScore).filter(
+            ItemScore.topic_id == topic.id,
+            ItemScore.user_vote < 0,
+            Item.embedding.isnot(None)
+        ).all()
+        if anti_votes:
+            vecs = [v[0] for v in anti_votes]
+            avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
+            magnitude = sum(x*x for x in avg_vec)**0.5
+            topic_vectors[topic.id]["anti"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
+
+    for item in items:
+        if not item.embedding:
+            continue
             
-        topic_vectors = {}
+        boost = 0.0
+        reasons = []
+        if item.venue:
+            venue_lower = item.venue.lower()
+            journal_boost = HIGH_IMPACT_JOURNALS.get(venue_lower, 0.0)
+            if journal_boost > 0.0:
+                boost += journal_boost
+                reasons.append(f"High-impact journal boost (+{journal_boost})")
+
         for topic in active_topics:
-            topic_vectors[topic.id] = {}
-            pro_votes = db.query(Item.embedding).join(ItemScore).filter(
-                ItemScore.topic_id == topic.id,
-                ItemScore.user_vote > 0,
-                Item.embedding.isnot(None)
-            ).all()
-            if pro_votes:
-                vecs = [v[0] for v in pro_votes]
-                avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
-                magnitude = sum(x*x for x in avg_vec)**0.5
-                topic_vectors[topic.id]["pro"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
-                
-            anti_votes = db.query(Item.embedding).join(ItemScore).filter(
-                ItemScore.topic_id == topic.id,
-                ItemScore.user_vote < 0,
-                Item.embedding.isnot(None)
-            ).all()
-            if anti_votes:
-                vecs = [v[0] for v in anti_votes]
-                avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
-                magnitude = sum(x*x for x in avg_vec)**0.5
-                topic_vectors[topic.id]["anti"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
-
-        for item in items:
-            if not item.embedding:
+            if not topic.embedding:
                 continue
                 
-            boost = 0.0
-            reasons = []
-            if item.venue:
-                venue_lower = item.venue.lower()
-                journal_boost = HIGH_IMPACT_JOURNALS.get(venue_lower, 0.0)
-                if journal_boost > 0.0:
-                    boost += journal_boost
-                    reasons.append(f"High-impact journal boost (+{journal_boost})")
-
-            for topic in active_topics:
-                if not topic.embedding:
-                    continue
+            raw_sim = compute_cosine_similarity(item.embedding, topic.embedding)
+            sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
+            
+            topic_specific_reasons = []
+            pro_vector = topic_vectors.get(topic.id, {}).get("pro")
+            anti_vector = topic_vectors.get(topic.id, {}).get("anti")
+            
+            if pro_vector:
+                pro_sim = compute_cosine_similarity(item.embedding, pro_vector)
+                if pro_sim > 0.80:
+                    boost_amount = min(0.3, (pro_sim - 0.80) * 2.0)
+                    sim = min(1.0, sim + boost_amount)
+                    topic_specific_reasons.append(f"Pro-topic similarity (+{boost_amount:.2f})")
                     
-                raw_sim = compute_cosine_similarity(item.embedding, topic.embedding)
-                sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
-                
-                topic_specific_reasons = []
-                pro_vector = topic_vectors.get(topic.id, {}).get("pro")
-                anti_vector = topic_vectors.get(topic.id, {}).get("anti")
-                
-                if pro_vector:
-                    pro_sim = compute_cosine_similarity(item.embedding, pro_vector)
-                    if pro_sim > 0.80:
-                        boost_amount = min(0.3, (pro_sim - 0.80) * 2.0)
-                        sim = min(1.0, sim + boost_amount)
-                        topic_specific_reasons.append(f"Pro-topic similarity (+{boost_amount:.2f})")
-                        
-                if anti_vector:
-                    anti_sim = compute_cosine_similarity(item.embedding, anti_vector)
-                    if anti_sim > 0.80:
-                        penalty = min(0.5, (anti_sim - 0.80) * 3.0)
-                        sim = max(0.0, sim - penalty)
-                        topic_specific_reasons.append(f"Anti-topic penalty (-{penalty:.2f})")
-                
-                topic_boost = 0.0
-                if topic.keywords:
-                    kws = [k.strip().lower() for k in topic.keywords.split(",")]
-                    paper_title = item.title.lower() if item.title else ""
-                    paper_abs = item.abstract.lower() if item.abstract else ""
-                    for kw in kws:
-                        if not kw: continue
-                        kw_base = kw[:-1] if kw.endswith('s') else kw
-                        if kw_base in paper_title:
-                            topic_boost += 0.15
-                            topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
-                        elif kw_base in paper_abs:
-                            topic_boost += 0.10
-                            topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
+            if anti_vector:
+                anti_sim = compute_cosine_similarity(item.embedding, anti_vector)
+                if anti_sim > 0.80:
+                    penalty = min(0.5, (anti_sim - 0.80) * 3.0)
+                    sim = max(0.0, sim - penalty)
+                    topic_specific_reasons.append(f"Anti-topic penalty (-{penalty:.2f})")
+            
+            topic_boost = 0.0
+            if topic.keywords:
+                kws = [k.strip().lower() for k in topic.keywords.split(",")]
+                paper_title = item.title.lower() if item.title else ""
+                paper_abs = item.abstract.lower() if item.abstract else ""
+                for kw in kws:
+                    if not kw: continue
+                    kw_base = kw[:-1] if kw.endswith('s') else kw
+                    if kw_base in paper_title:
+                        topic_boost += 0.15
+                        topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
+                    elif kw_base in paper_abs:
+                        topic_boost += 0.10
+                        topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
 
-                final_score = min(1.0, sim + boost + topic_boost)
+            final_score = min(1.0, sim + boost + topic_boost)
+            
+            score_entry = db.query(ItemScore).filter(ItemScore.item_id == item.id, ItemScore.topic_id == topic.id).first()
+            if not score_entry:
+                score_entry = ItemScore(item_id=item.id, topic_id=topic.id)
+                db.add(score_entry)
                 
-                score_entry = db.query(ItemScore).filter(ItemScore.item_id == item.id, ItemScore.topic_id == topic.id).first()
-                if not score_entry:
-                    score_entry = ItemScore(item_id=item.id, topic_id=topic.id)
-                    db.add(score_entry)
-                    
-                score_entry.semantic_score = sim
-                score_entry.final_score = final_score
-                score_entry.reasons = [f"Semantic match to '{topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
+            score_entry.semantic_score = sim
+            score_entry.final_score = final_score
+            score_entry.reasons = [f"Semantic match to '{topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
 
-        db.commit()
-        return {"status": "success"}
+    db.commit()
+    return {"status": "success"}
 
 @router.put("/{item_id}/unhide", response_model=dict)
 def unhide_item(item_id: str, db: Session = Depends(get_db)):
@@ -723,7 +720,7 @@ from typing import Optional
 
 class VoteRequest(BaseModel):
     topic_id: Optional[str] = None
-    vote: int # 2: Star, 1: Up, 0: Neutral, -1: Down
+    vote: Optional[int] = None # None: Unrated, 2: Star, 1: Up, 0: Neutral, -1: Down
 
 @router.post("/{item_id}/vote", response_model=dict)
 def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)):
@@ -731,19 +728,26 @@ def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)
     if not item:
         return {"status": "error", "message": "Item not found"}
         
-    # Set acknowledged so it hides globally
-    item.is_acknowledged = True
-    
-    # If Star (2), also set is_starred globally for Zotero
-    if vote_req.vote == 2:
-        item.is_starred = True
-    elif vote_req.vote == -1:
-        # Also set is_hidden globally
-        item.is_hidden = True
+    if vote_req.vote is None:
+        item.is_acknowledged = False
         item.is_starred = False
-    elif vote_req.vote == 1 or vote_req.vote == 0:
-        # Normal read or upvote
         item.is_hidden = False
+    else:
+        # Set acknowledged so it hides globally
+        item.is_acknowledged = True
+        
+        # If Star (2), also set is_starred globally for Zotero
+        if vote_req.vote == 2:
+            item.is_starred = True
+            item.is_hidden = False
+        elif vote_req.vote == -1:
+            # Also set is_hidden globally
+            item.is_hidden = True
+            item.is_starred = False
+        elif vote_req.vote in [1, 0]:
+            # Normal read or upvote
+            item.is_hidden = False
+            item.is_starred = False
         
     from src.models.item_score import ItemScore
     

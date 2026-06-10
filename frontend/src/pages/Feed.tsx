@@ -109,7 +109,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
   })
 
   const voteItem = useMutation({
-    mutationFn: async ({ id, vote }: { id: string, vote: number }) => {
+    mutationFn: async ({ id, vote }: { id: string, vote: number | null }) => {
       return axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: topicId || null, vote })
     },
     onSuccess: () => refetch()
@@ -146,7 +146,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
     }
   }
 
-  const handleBulkVote = async (vote: number) => {
+  const handleBulkVote = async (vote: number | null) => {
     try {
       await Promise.all(selectedItems.map(id => axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: topicId || null, vote })))
       setSelectedItems([])
@@ -306,16 +306,16 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
           )}
 
           {selectedItems.length > 0 && (
-            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background text-foreground border border-border shadow-2xl px-6 py-3 rounded-full flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5">
+            <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-background border border-border shadow-2xl px-6 py-3 rounded-full flex items-center gap-4 z-50 animate-in slide-in-from-bottom-5">
               <span className="font-semibold text-sm">{selectedItems.length} selected</span>
-              <div className="h-4 w-px bg-foreground/20"></div>
+              <div className="h-4 w-px bg-border"></div>
               <button 
                 onClick={() => handleExportBibtex(selectedItems)}
                 className="text-sm font-semibold hover:text-primary transition-colors flex items-center gap-2"
               >
-                BibTeX 📥
+                BibTeX
               </button>
-              <div className="h-4 w-px bg-foreground/20"></div>
+              <div className="h-4 w-px bg-border"></div>
               
               <div className="flex items-center gap-2">
                 <button 
@@ -348,7 +348,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
                 </button>
               </div>
 
-              <div className="h-4 w-px bg-foreground/20"></div>
+              <div className="h-4 w-px bg-border"></div>
               <button 
                 onClick={handleBulkRescore}
                 className="text-sm font-semibold text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-2"
@@ -357,7 +357,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
                 <RefreshCw size={16} /> Rescore
               </button>
 
-              <div className="h-4 w-px bg-foreground/20"></div>
+              <div className="h-4 w-px bg-border"></div>
               <button onClick={() => setSelectedItems([])} className="text-sm opacity-60 hover:opacity-100">
                 Cancel
               </button>
