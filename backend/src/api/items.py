@@ -172,7 +172,33 @@ async def run_ingestion(db: Session, days_back: int = 3):
             
         # Parse basic fields
         title = paper.get("title", "Unknown Title")
-        abstract = paper.get("abstract") or "No abstract available."
+        abstract = paper.get("abstract")
+        pmid = paper.get("externalIds", {}).get("PubMed")
+        
+        if not abstract and (doi or pmid):
+            import httpx
+            import re
+            try:
+                async with httpx.AsyncClient() as client:
+                    # 1. Try CrossRef if DOI exists
+                    if doi:
+                        resp = await client.get(f"https://api.crossref.org/works/{doi}", timeout=5.0)
+                        if resp.status_code == 200:
+                            cr_abs = resp.json().get("message", {}).get("abstract")
+                            if cr_abs:
+                                abstract = re.sub(r'<[^>]+>', '', cr_abs).strip()
+                    
+                    # 2. Try EuropePMC if PMID exists and still no abstract
+                    if not abstract and pmid:
+                        resp = await client.get(f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=ext_id:{pmid}&resultType=core&format=json", timeout=5.0)
+                        if resp.status_code == 200:
+                            results = resp.json().get("resultList", {}).get("result", [])
+                            if results and results[0].get("abstractText"):
+                                abstract = re.sub(r'<[^>]+>', '', results[0].get("abstractText")).strip()
+            except Exception as e:
+                print(f"Fallback abstract fetch failed: {e}")
+                
+        abstract = abstract or "No abstract available."
         authors_list = paper.get("authors", [])
         author_names_list = [a.get("name") for a in authors_list if a.get("name")]
         

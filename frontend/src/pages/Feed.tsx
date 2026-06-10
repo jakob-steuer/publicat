@@ -11,15 +11,15 @@ const fetchTopics = async () => {
   return data
 }
 
-const fetchDashboard = async (topicId?: string, authorId?: string, showAcknowledged: boolean = false, showPreprints: boolean = true, minScore: number = 0.20) => {
-  let url = `http://localhost:8001/dashboard/?show_acknowledged=${showAcknowledged}&show_preprints=${showPreprints}&min_score=${minScore}`
+const fetchDashboard = async (topicId?: string, authorId?: string, showAcknowledged: boolean = false, showPreprints: boolean = true, showDiscarded: boolean = false, minScore: number = 0.20) => {
+  let url = `http://localhost:8001/dashboard/?show_acknowledged=${showAcknowledged}&show_preprints=${showPreprints}&show_discarded=${showDiscarded}&min_score=${minScore}`
   if (topicId) url += `&topic_id=${topicId}`
   if (authorId) url += `&author_id=${encodeURIComponent(authorId)}`
   const { data } = await axios.get(url)
   return data
 }
 
-export default function Feed({ showRead, showPreprints, searchQuery, minScore, isDark, toggleTheme }: any) {
+export default function Feed({ showRead, showPreprints, showDiscarded, searchQuery, minScore, isDark, toggleTheme }: any) {
   const queryClient = useQueryClient()
   const { topicId, authorId } = useParams()
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
@@ -46,8 +46,8 @@ export default function Feed({ showRead, showPreprints, searchQuery, minScore, i
 
 
   const { data: dashboard, isLoading, refetch } = useQuery({ 
-    queryKey: ['dashboard', topicId, authorId, showRead, showPreprints, minScore], 
-    queryFn: () => fetchDashboard(topicId, authorId, showRead, showPreprints, minScore) 
+    queryKey: ['dashboard', topicId, authorId, showRead, showPreprints, showDiscarded, minScore], 
+    queryFn: () => fetchDashboard(topicId, authorId, showRead, showPreprints, showDiscarded, minScore) 
   })
 
   // Invalidate queries when sync completes

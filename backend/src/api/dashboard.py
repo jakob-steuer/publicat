@@ -19,7 +19,7 @@ def serialize_item(item, score=None):
     return d
 
 @router.get("/", response_model=Dict[str, Any])
-def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = None, show_acknowledged: bool = False, show_preprints: bool = True, min_score: float = 0.20, db: Session = Depends(get_db)):
+def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = None, show_acknowledged: bool = False, show_preprints: bool = True, show_discarded: bool = False, min_score: float = 0.20, db: Session = Depends(get_db)):
     # Base query for Items
     if topic_id:
         base_query = db.query(Item, ItemScore.final_score).join(
@@ -33,8 +33,9 @@ def get_dashboard(topic_id: Optional[str] = None, author_id: Optional[str] = Non
         ).group_by(Item.id)
         base_query = base_query.having(func.max(ItemScore.final_score) >= min_score)
         
-    # Always filter out hidden items
-    base_query = base_query.filter(Item.is_hidden == False)
+    # Filter hidden items unless show_discarded is True
+    if not show_discarded:
+        base_query = base_query.filter(Item.is_hidden == False)
     
     if author_id:
         if author_id.startswith("ORCID:"):

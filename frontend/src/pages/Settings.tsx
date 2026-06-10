@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import React, { useState } from 'react'
-import { Link } from 'react-router-dom'
+
 import type { Topic, Follow } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
 
@@ -476,18 +476,6 @@ export default function Settings() {
         </form>
       </div>
 
-      <div className="border rounded-lg p-6 bg-card shadow-sm mt-8">
-        <h2 className="text-xl font-semibold mb-2">Discarded Papers</h2>
-        <p className="text-sm text-muted-foreground mb-6">
-          View papers that you have previously dismissed from your feed. You can review them or un-discard them to bring them back.
-        </p>
-        <Link 
-          to="/discarded"
-          className="bg-secondary text-secondary-foreground px-4 py-2 rounded font-medium hover:bg-secondary/80 transition-colors inline-block"
-        >
-          View Discarded Papers
-        </Link>
-      </div>
 
       <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">
         <h2 className="text-xl font-semibold mb-2 text-red-700 dark:text-red-400">Data Management</h2>

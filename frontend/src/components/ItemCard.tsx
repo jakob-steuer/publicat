@@ -97,10 +97,10 @@ export function ItemCard({
         ) : (
           <button 
             onClick={() => hideItem.mutate(item.id)}
-            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-red-500 font-bold ml-1"
+            className="hover:scale-110 transition-transform p-1 bg-background/50 rounded-full text-red-500 font-bold ml-1 text-sm flex items-center justify-center w-7 h-7"
             title="Dismiss / Hide"
           >
-            ❌
+            ✕
           </button>
         )}
       </div>
