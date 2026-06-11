@@ -13,14 +13,33 @@ Streamline your academic reading into a manageable daily habit using **Inbox Zer
 
 ## Quick Start & Installation
 
-There are two ways to run Publicat: via the deployment scripts or via manual command line setup.
+**🎉 New in v1.0.1: We now support 1-Click zero-dependency installations!**
 
-### Easy Installer Scripts
+There are two ways to run Publicat: downloading the pre-packaged release, or cloning the repository manually.
 
-We provide deployment scripts to ensure your local AI tools are hardware-accelerated and properly isolated.
+### Option 1: 1-Click Install (Recommended)
+
+This is the easiest way to run Publicat. You do **not** need Node.js or Docker installed!
+
+1. Go to the [Releases page](https://github.com/jakob-steuer/publicat/releases).
+2. Download the `publicat-release.zip` file for the latest version.
+3. Extract the folder to your computer.
+4. **Windows:** Double-click `start.bat`.
+   **Mac/Linux:** Open a terminal in the folder and run:
+   ```bash
+   chmod +x start.sh
+   ./start.sh
+   ```
+
+*What does this do?*
+It automatically checks for and installs `uv` (a lightweight Python manager), creates an isolated virtual environment, installs PyTorch for your system (CUDA/MPS), and launches the pre-compiled app in your browser at `http://localhost:8001`!
+
+### Option 2: Developer Git Install
+
+If you want to pull updates via Git or modify the code, you will need **Node.js (v18+)** installed to build the frontend.
 
 **For Mac/Linux:**
-1. Download or `git clone` this repository.
+1. `git clone git@github.com:jakob-steuer/publicat.git`
 2. Open a terminal in the folder and run:
    ```bash
    chmod +x start.sh
@@ -28,11 +47,8 @@ We provide deployment scripts to ensure your local AI tools are hardware-acceler
    ```
 
 **For Windows:**
-1. Download or `git clone` this repository.
+1. `git clone git@github.com:jakob-steuer/publicat.git`
 2. Double-click the `start.bat` file.
-
-*What does this do?*
-It automatically checks for and installs `uv` (a Python manager), creates an isolated virtual environment, installs PyTorch for your system (CUDA/MPS), builds the React frontend, and launches the app in your browser at `http://localhost:8001`!
 
 ### Manual Installation
 Make sure you have Node.js (v18+) and Python (3.11+) with `uv` installed.
@@ -43,8 +59,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 1. **Clone the repository:**
    ```bash
-   git clone git@github.com:jakob-steuer/eureka.git
-   cd eureka
+   git clone git@github.com:jakob-steuer/publicat.git
+   cd publicat
    ```
 
 2. **Start the Backend:**
