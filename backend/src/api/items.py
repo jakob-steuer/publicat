@@ -122,13 +122,22 @@ async def run_ingestion(db: Session, days_back: int = 3):
     if sync_state["status"] == "aborted":
         return
         
-    identifiers_list = list(all_identifiers)
+    # Pre-filter to exclude papers we already have in the database
+    existing_s2_ids = {i[0] for i in db.query(Item.source_native_id).filter(Item.source == "semantic_scholar").all()}
+    existing_dois = {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
+    existing_corpus = {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
+    existing_arxiv = {i[0] for i in db.query(Item.source_native_id).filter(Item.source == "arxiv").all()}
+    
+    existing_set = existing_s2_ids | existing_dois | existing_corpus | existing_arxiv
+    
+    identifiers_list = [i for i in all_identifiers if i not in existing_set]
+    
     if not identifiers_list:
         sync_state["message"] = "No new papers discovered."
         return
         
     # 2. ENRICHMENT PHASE
-    sync_state["message"] = f"Enriching {len(identifiers_list)} papers via S2 Batch..."
+    sync_state["message"] = f"Enriching {len(identifiers_list)} NEW papers via S2 Batch..."
     sync_state["progress"] = 40
     
     enriched_papers = await enrich_papers_s2(identifiers_list)
