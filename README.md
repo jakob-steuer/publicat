@@ -6,7 +6,10 @@
 
 ---
 
-**PUBLICAT** automatically ingests, scores, and summarizes scientific papers based on your highly specific topics of interest. Stay on top of the latest research without drowning in generic feeds.
+**PUBLICAT** is your ruthlessly efficient, highly-personalized "bouncer" for the daily literature firehose. 
+Instead of doom-scrolling through hundreds of noisy arXiv preprints or generic keyword alerts, Publicat uses local vector math and an explicit LLM judge to filter, score, and summarize only the papers you actually care about.
+
+Turn academic reading from a stressful chore into a manageable daily habit with gamified **Inbox Zero** mechanics and seamless Zotero RSS exports!
 
 ## Quick Start & Installation
 
@@ -85,9 +88,9 @@ If you're unsure how to describe your topic, ask an LLM of your choice:
 
 ## Using the Interface
 
-Publicat uses a simple scoring and review system to help you reach Inbox Zero.
+Publicat uses a Tinder-style review system to help you quickly triage your daily feed and reach **Inbox Zero**. Your goal is to clear out your unread feed every day!
 
-- ⭐ **Star (+2):** Save this paper. It will be permanently kept in your "Starred" feed for future reference, be send to the Zotero RSS feed and heavily boosts similar papers in your feed.
+- ⭐ **Star (+2):** Save this paper. It will be permanently kept in your "Starred" feed for future reference, exported to your Zotero RSS feed, and heavily boosts similar papers in your future feed.
 - 👍 **Upvote (+1):** Relevant paper, but you don't need to save it permanently. Boosts similar papers.
 - ➖ **Neutral (0):** Mark as read. Neither boosts nor penalizes similar papers.
 - 👎 **Downvote / Discard (-1):** Not relevant. Hides the paper entirely and penalizes similar papers in the future.
