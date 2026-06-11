@@ -31,6 +31,12 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
   const { data: topics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
   const { data: syncProgress } = useQuery({ queryKey: ['syncProgress'], queryFn: fetchSyncProgress, refetchInterval: (data: any) => (data?.status === 'running' || data?.status === 'paused') ? 2000 : false })
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: fetchSettings })
+  const [, setTick] = useState(0)
+
+  useEffect(() => {
+    const timer = setInterval(() => setTick(t => t + 1), 60000)
+    return () => clearInterval(timer)
+  }, [])
 
   const handleFetch = async () => {
     if (syncProgress?.status === 'running' || syncProgress?.status === 'paused') return
@@ -203,7 +209,7 @@ function App() {
     return saved !== null ? saved === 'true' : true
   })
   const [searchQuery, setSearchQuery] = useState('')
-  const [minScore, setMinScore] = useState(0.20)
+  const [minScore, setMinScore] = useState(0.50)
   const [isDark, setIsDark] = useState(() => {
     const savedTheme = localStorage.getItem('theme')
     if (savedTheme) return savedTheme === 'dark'

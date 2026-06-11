@@ -57,7 +57,7 @@ CRITICAL RULES:
 - Start directly with the first factual sentence.
 - Use a maximum of 3 sentences.
 - STRICT MAXIMUM 400 CHARACTERS.
-- Analyze the abstract to determine if the paper introduces a NEW software tool, software package, open-source framework, database, or specific novel algorithm. If it does, extract its exact name. If the paper merely uses existing tools or discusses general concepts, return an empty list.
+- Analyze the abstract to determine if the paper introduces a NEW software tool, software package, open-source framework, database, specific novel algorithm, or a new AI model (e.g., PLMs, LLMs). If it does, extract its exact name. If the paper merely uses existing tools or discusses general concepts, return an empty list.
 
 Abstract:
 {text}
@@ -89,7 +89,7 @@ Respond ONLY with a valid JSON object matching this schema:
 
     async def extract_keywords(self, text: str, topic_desc: str) -> list[str]:
         prompt = f"""You are a scientific data extractor analyzing a paper for a researcher interested in: '{topic_desc}'.
-Analyze the abstract to determine if the paper introduces a NEW software tool, software package, open-source framework, database, or specific novel algorithm. If it does, extract its exact name. If the paper merely uses existing tools or discusses general concepts, return an empty list.
+Analyze the abstract to determine if the paper introduces a NEW software tool, software package, open-source framework, database, specific novel algorithm, or a new AI model (e.g., PLMs, LLMs). If it does, extract its exact name. If the paper merely uses existing tools or discusses general concepts, return an empty list.
 
 Abstract:
 {text}

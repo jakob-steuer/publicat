@@ -286,7 +286,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
                 </Link>
               </div>
             </div>
-          ) : dashboard?.do_not_miss?.length === 0 && dashboard?.this_week?.length === 0 && dashboard?.starred?.length === 0 && dashboard?.highlighted_authors?.length === 0 ? (
+          ) : dashboard?.do_not_miss?.length === 0 && dashboard?.this_week?.length === 0 && dashboard?.this_month?.length === 0 && dashboard?.highlighted_authors?.length === 0 && dashboard?.tools?.length === 0 ? (
             <div className="py-20 text-center border-2 border-dashed rounded-xl">
               <h3 className="text-xl font-semibold mb-2">Inbox Zero! 🎉</h3>
               <p className="text-muted-foreground">You are completely caught up on your research.</p>
