@@ -53,7 +53,8 @@ async def run_summarization_pipeline(db: Session = None):
                         Item, ItemScore.item_id == Item.id
                     ).filter(
                         ItemScore.topic_id == topic.id,
-                        ItemScore.llm_relevance_score == None
+                        ItemScore.llm_relevance_score == None,
+                        ItemScore.final_score >= 0.3
                     ).order_by(ItemScore.final_score.desc()).limit(50).all()
                     
                     total_candidates = len(candidates)
