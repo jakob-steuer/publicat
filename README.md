@@ -6,10 +6,10 @@
 
 ---
 
-**PUBLICAT** is your ruthlessly efficient, highly-personalized "bouncer" for the daily literature firehose. 
-Instead of doom-scrolling through hundreds of noisy arXiv preprints or generic keyword alerts, Publicat uses local vector math and an explicit LLM judge to filter, score, and summarize only the papers you actually care about.
+**PUBLICAT** is a highly-personalized, efficient triage system for managing daily scientific literature. 
+Instead of manually sifting through hundreds of noisy arXiv preprints or generic keyword alerts, Publicat uses local vector embeddings and an explicit LLM judge to filter, score, and summarize the papers that match your specific research interests.
 
-Turn academic reading from a stressful chore into a manageable daily habit with gamified **Inbox Zero** mechanics and seamless Zotero RSS exports!
+Streamline your academic reading into a manageable daily habit using **Inbox Zero** mechanics, complete with seamless Zotero RSS exports.
 
 ## Quick Start & Installation
 
@@ -88,7 +88,7 @@ If you're unsure how to describe your topic, ask an LLM of your choice:
 
 ## Using the Interface
 
-Publicat uses a Tinder-style review system to help you quickly triage your daily feed and reach **Inbox Zero**. Your goal is to clear out your unread feed every day!
+Publicat utilizes an efficient, swipe-style review system to help you quickly triage your daily feed and maintain **Inbox Zero**. Your goal is to clear out your unread feed every day:
 
 - ⭐ **Star (+2):** Save this paper. It will be permanently kept in your "Starred" feed for future reference, exported to your Zotero RSS feed, and heavily boosts similar papers in your future feed.
 - 👍 **Upvote (+1):** Relevant paper, but you don't need to save it permanently. Boosts similar papers.
