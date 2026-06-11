@@ -11,6 +11,16 @@ Instead of manually sifting through hundreds of noisy arXiv preprints or generic
 
 Streamline your academic reading into a manageable daily habit using **Inbox Zero** mechanics, complete with seamless Zotero RSS exports.
 
+## Prerequisites: AI Models
+
+Publicat uses a dual-stage filtering system. Stage 1 uses local vectors (which requires no setup), but Stage 2 relies on an LLM to accurately judge and summarize the papers. 
+
+To use the Stage 2 LLM Reranking, you must have **one** of the following:
+1. **[Ollama](https://ollama.com/)** installed and running locally on your machine (100% free and private).
+2. **OR** an API Key from Anthropic (Claude) or Google (Gemini), which you can enter in the Settings menu after launching the app.
+
+*(Note: If you don't have either, you can disable Stage 2 Reranking in the Settings menu, but the quality of your feed will be reduced).*
+
 ## Quick Start & Installation
 
 **🎉 New in v1.0.1: We now support 1-Click zero-dependency installations!**
