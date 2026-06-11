@@ -1,0 +1,44 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger automatically when you push a tag like v1.0.0
+  workflow_dispatch: # Allow manual triggering from the Actions tab
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Build Frontend
+        working-directory: ./frontend
+        run: npm run build
+
+      - name: Package Release
+        run: |
+          # Create a zip file of the project
+          # Exclude development files, large dependencies, and git history
+          zip -r publicat-release.zip . -x "*.git*" "*node_modules*" "*backend/.venv*" "*backend/__pycache__*" "*.env*" "*.DS_Store" "backend/publikater.db*"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: publicat-release.zip
+          generate_release_notes: true
