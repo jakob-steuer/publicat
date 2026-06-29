@@ -6,7 +6,7 @@
 
 ---
 
-**PUBLICAT** is a highly-personalized, efficient triage system for managing daily scientific literature. 
+**PUBLICAT** is a highly-personalized, efficient triage syste for managing daily scientific literature. 
 Instead of manually sifting through hundreds of noisy arXiv preprints or generic keyword alerts, Publicat uses local vector embeddings and an explicit LLM judge to filter, score, and summarize the papers that match your specific research interests.
 
 Streamline your academic reading into a manageable daily habit using **Inbox Zero** mechanics, complete with seamless Zotero RSS exports.
