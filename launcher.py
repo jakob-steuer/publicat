@@ -79,8 +79,12 @@ def main():
 
     # 4. Start Server
     print("\n[4/4] Starting Server...")
-    port = 8001
-    
+    port = int(os.environ.get("PUBLICAT_PORT", "8001"))
+    # Bind to localhost only by default: the API exposes settings and sync
+    # controls without authentication. Set PUBLICAT_HOST=0.0.0.0 to serve the
+    # LAN (e.g. for a phone on the same network).
+    host = os.environ.get("PUBLICAT_HOST", "127.0.0.1")
+
     if is_port_in_use(port):
         print(f"⚠️ Port {port} is already in use. Assuming the server is already running.")
     else:
@@ -92,7 +96,7 @@ def main():
         # (because start.sh / start.bat uses `uv run launcher.py`)
         print("Starting Uvicorn...")
         server_process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", str(port), "--no-access-log"],
+            [sys.executable, "-m", "uvicorn", "src.main:app", "--host", host, "--port", str(port), "--no-access-log"],
             cwd=backend_dir,
             env=env
         )

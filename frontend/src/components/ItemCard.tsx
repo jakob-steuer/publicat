@@ -3,10 +3,10 @@ import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Star, ThumbsUp, Minus, ThumbsDown } from 'lucide-react'
 import type { UseMutationResult } from '@tanstack/react-query'
-import type { Item, Follow } from '../types'
+import type { Item, Follow, Vote, VotePayload } from '../types'
 
 interface ItemCardProps {
-  item: Item & { score?: number, user_vote?: number };
+  item: Item;
   selectedItems: string[];
   toggleSelect: (id: string) => void;
   follows: Follow[];
@@ -18,7 +18,9 @@ interface ItemCardProps {
   unacknowledgeItem: UseMutationResult<any, Error, string, unknown>;
   hideItem: UseMutationResult<any, Error, string, unknown>;
   unhideItem?: UseMutationResult<any, Error, string, unknown>;
-  voteItem?: UseMutationResult<any, Error, { id: string, vote: number | null }, unknown>;
+  voteItem?: UseMutationResult<any, Error, VotePayload, unknown>;
+  /** Show which topic a vote goes to (used on the overview feed). */
+  showTopic?: boolean;
 }
 
 export function ItemCard({
@@ -34,12 +36,27 @@ export function ItemCard({
   unacknowledgeItem,
   hideItem,
   unhideItem,
-  voteItem
+  voteItem,
+  showTopic = false
 }: ItemCardProps) {
   const [expandedAuthors, setExpandedAuthors] = useState(false)
-  const [localVote, setLocalVote] = useState(item.user_vote)
+  const serverVote = item.user_vote as Vote | undefined
+  const [localVote, setLocalVote] = useState<Vote | undefined>(serverVote)
+  // Re-sync the optimistic vote when the server value changes (bulk actions, refetch).
+  const [prevServerVote, setPrevServerVote] = useState(serverVote)
+  if (serverVote !== prevServerVote) {
+    setPrevServerVote(serverVote)
+    setLocalVote(serverVote)
+  }
   const isLongAuthorList = (item.author_details?.length ?? item.authors?.length ?? 0) > 8
-  
+
+  const castVote = (vote: Vote) => {
+    const next: Vote = localVote === vote ? null : vote
+    setLocalVote(next)
+    // Every vote is attributed to exactly one topic: the one this card was scored for.
+    voteItem?.mutate({ id: item.id, vote: next, topicId: item.topic_id ?? null })
+  }
+
   return (
     <div key={item.id} className="relative flex flex-col justify-between bg-card rounded-md border-t-4 border-t-primary/80 border-x border-b shadow-sm hover:shadow-md transition-shadow p-5 pt-6 group mt-4">
       {/* Top left score */}
@@ -68,29 +85,29 @@ export function ItemCard({
         />
         {voteItem ? (
           <>
-            <button 
-              onClick={() => { const v = localVote === 2 ? null : 2; setLocalVote(v); voteItem.mutate({ id: item.id, vote: v }); }}
+            <button
+              onClick={() => castVote(2)}
               className={`hover:scale-110 transition-transform p-1 rounded-full ml-1 flex items-center justify-center w-8 h-8 shadow-sm border ${localVote === 2 ? 'bg-yellow-100 text-yellow-600 border-yellow-300 dark:bg-yellow-900/50 dark:border-yellow-700' : 'bg-background/50 text-muted-foreground border-border/50 opacity-50 hover:opacity-100 hover:text-yellow-500'}`}
               title="Star / Super Upvote (+2)"
             >
               <Star size={16} className={localVote === 2 ? "fill-yellow-600" : ""} />
             </button>
-            <button 
-              onClick={() => { const v = localVote === 1 ? null : 1; setLocalVote(v); voteItem.mutate({ id: item.id, vote: v }); }}
+            <button
+              onClick={() => castVote(1)}
               className={`hover:scale-110 transition-transform p-1 rounded-full ml-1 flex items-center justify-center w-8 h-8 shadow-sm border ${localVote === 1 ? 'bg-green-100 text-green-600 border-green-300 dark:bg-green-900/50 dark:border-green-700' : 'bg-background/50 text-muted-foreground border-border/50 opacity-50 hover:opacity-100 hover:text-green-500'}`}
               title="Upvote (+1)"
             >
               <ThumbsUp size={16} className={localVote === 1 ? "fill-green-600" : ""} />
             </button>
-            <button 
-              onClick={() => { const v = localVote === 0 ? null : 0; setLocalVote(v); voteItem.mutate({ id: item.id, vote: v }); }}
+            <button
+              onClick={() => castVote(0)}
               className={`hover:scale-110 transition-transform p-1 rounded-full ml-1 flex items-center justify-center w-8 h-8 shadow-sm border ${localVote === 0 ? 'bg-blue-100 text-blue-600 border-blue-300 dark:bg-blue-900/50 dark:border-blue-700' : 'bg-background/50 text-muted-foreground border-border/50 opacity-50 hover:opacity-100 hover:text-blue-500'}`}
               title="Neutral / Read (0)"
             >
               <Minus size={16} />
             </button>
-            <button 
-              onClick={() => { const v = localVote === -1 ? null : -1; setLocalVote(v); voteItem.mutate({ id: item.id, vote: v }); }}
+            <button
+              onClick={() => castVote(-1)}
               className={`hover:scale-110 transition-transform p-1 rounded-full ml-1 flex items-center justify-center w-8 h-8 shadow-sm border ${localVote === -1 ? 'bg-red-100 text-red-600 border-red-300 dark:bg-red-900/50 dark:border-red-700' : 'bg-background/50 text-muted-foreground border-border/50 opacity-50 hover:opacity-100 hover:text-red-500'}`}
               title="Downvote / Discard (-1)"
             >
@@ -147,13 +164,23 @@ export function ItemCard({
       <div>
         {/* 1. The Summary (Hero content) */}
         <div className="mb-4">
-          {(item.t3_summary || item.t1_tldr || item.t2_summary) && (
-            <div className="mb-2">
-              <span className="font-sans font-bold text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded uppercase border border-blue-200 shadow-sm">
-                AI Summary
-              </span>
+          {(showTopic && item.topic_name) || item.t3_summary || item.t1_tldr || item.t2_summary ? (
+            <div className="mb-2 flex flex-wrap gap-1.5 items-center">
+              {showTopic && item.topic_name && (
+                <span
+                  className="font-sans font-semibold text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded border border-primary/20 max-w-[60%] truncate"
+                  title={`Votes on this card train the topic "${item.topic_name}"`}
+                >
+                  {item.topic_name}
+                </span>
+              )}
+              {(item.t3_summary || item.t1_tldr || item.t2_summary) && (
+                <span className="font-sans font-bold text-[10px] bg-blue-100 text-blue-800 px-1.5 py-0.5 rounded uppercase border border-blue-200 shadow-sm">
+                  {item.t3_summary || item.t2_summary ? 'AI Summary' : 'TLDR'}
+                </span>
+              )}
             </div>
-          )}
+          ) : null}
           {item.t3_summary ? (
             <p className="font-serif text-[15px] leading-relaxed text-foreground pr-14">
               {item.t3_summary}

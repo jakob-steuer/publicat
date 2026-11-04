@@ -1,73 +1,50 @@
 import asyncio
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from pydantic import BaseModel
-from fastapi import APIRouter, Depends, BackgroundTasks
-from sqlalchemy.orm import Session
-from sqlalchemy import desc, or_
 
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends
+from pydantic import BaseModel
+from sqlalchemy import desc, or_
+from sqlalchemy.orm import Session
+
+from src.api.serialize import item_to_dict
 from src.database import get_db
-from src.models.item import Item
-from src.models.topic import Topic
-from src.models.item_score import ItemScore
-from src.models.follow import Follow
-from src.models.app_config import AppConfig
-from src.sources.semantic_scholar import discover_new_papers_s2, enrich_papers_s2
-from src.sources.oai_pmh import harvest_arxiv_oai, harvest_biorxiv_api
-from src.embeddings import get_embedding, compute_cosine_similarity
+from src.embeddings import get_embedding
 from src.llm.pipeline import run_summarization_pipeline
+from src.models.app_config import AppConfig
+from src.models.item import Item
+from src.models.item_score import ItemScore
+from src.models.topic import Topic
+from src.ranking.scoring import (
+    Paper,
+    compute_topic_vectors,
+    load_follows,
+    score_paper,
+    should_keep,
+)
+from src.sources.oai_pmh import harvest_arxiv_oai, harvest_biorxiv_api
+from src.sources.semantic_scholar import discover_new_papers_s2, enrich_papers_s2
 
 router = APIRouter(prefix="/items", tags=["items"])
 
-HIGH_IMPACT_JOURNALS = {
-    "nature": 0.15,
-    "science": 0.15,
-    "cell": 0.15,
-    "the lancet": 0.15,
-    "lancet": 0.15,
-    "new england journal of medicine": 0.15,
-    "nejm": 0.15,
-    "jama": 0.15,
-    "bmj": 0.15,
-    "nature medicine": 0.15,
-    "nature biotechnology": 0.15,
-    "nature genetics": 0.15,
-    "nature methods": 0.15,
-    "cell stem cell": 0.15,
-    "cancer cell": 0.15,
-    "immunity": 0.15,
-    "molecular cell": 0.10,
-    "nature communications": 0.10,
-    "science advances": 0.10,
-    "pnas": 0.10,
-    "proceedings of the national academy of sciences": 0.10,
-    "blood": 0.10,
-    "elife": 0.10,
-    "nucleic acids research": 0.10,
-    "genome biology": 0.10,
-    "genome research": 0.10,
-    "embo journal": 0.10,
-    "plos biology": 0.10,
-    "plos medicine": 0.10,
-    "advanced science": 0.10,
-    "cancer discovery": 0.15,
-}
+CLEANUP_AFTER = timedelta(weeks=8)
 
 # Global state to track sync progress
 sync_state = {
-    "status": "idle", # "idle", "running", "paused", "aborted", "error"
+    "status": "idle",  # "idle", "running", "paused", "aborted", "error"
     "message": "Ready",
-    "progress": 0
+    "progress": 0,
 }
 
 
-
 class SyncControlRequest(BaseModel):
-    action: str # "pause" | "resume" | "abort"
+    action: str  # "pause" | "resume" | "abort"
+
 
 @router.post("/sync/control")
 def control_sync(req: SyncControlRequest):
-    global sync_state
     if req.action == "pause" and sync_state["status"] == "running":
         sync_state["status"] = "paused"
         sync_state["message"] = "Paused..."
@@ -79,767 +56,473 @@ def control_sync(req: SyncControlRequest):
         sync_state["message"] = "Aborted."
     return sync_state
 
+
+async def _fetch_missing_abstract(doi: Optional[str], pmid: Optional[str]) -> Optional[str]:
+    """CrossRef, then EuropePMC, for papers Semantic Scholar has no abstract for."""
+    if not (doi or pmid):
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            if doi:
+                resp = await client.get(f"https://api.crossref.org/works/{doi}", timeout=5.0)
+                if resp.status_code == 200:
+                    cr_abs = resp.json().get("message", {}).get("abstract")
+                    if cr_abs:
+                        return re.sub(r"<[^>]+>", "", cr_abs).strip()
+            if pmid:
+                resp = await client.get(
+                    f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=ext_id:{pmid}&resultType=core&format=json",
+                    timeout=5.0,
+                )
+                if resp.status_code == 200:
+                    results = resp.json().get("resultList", {}).get("result", [])
+                    if results and results[0].get("abstractText"):
+                        return re.sub(r"<[^>]+>", "", results[0]["abstractText"]).strip()
+    except Exception as e:
+        print(f"Fallback abstract fetch failed: {e}")
+    return None
+
+
+def _parse_published_at(paper: dict) -> datetime:
+    published_at = datetime.now(timezone.utc)
+    pub_date_str = paper.get("publicationDate")
+    pub_year = paper.get("year")
+    if pub_date_str:
+        try:
+            return datetime.strptime(pub_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    # Only a year: older years go to Jan 1st; the current year stays "now" so it
+    # still surfaces as new in the feed.
+    if pub_year and pub_year < published_at.year:
+        return datetime(pub_year, 1, 1, tzinfo=timezone.utc)
+    return published_at
+
+
 async def run_ingestion(db: Session, days_back: int = 3):
-    global sync_state
     sync_state["status"] = "running"
     sync_state["message"] = "Initializing fetch..."
     sync_state["progress"] = 5
-    # Fetch configurable days back (default 3 for delta)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    
-    # Load active topics and follows
-    active_topics = db.query(Topic).filter(Topic.is_active, Topic.embedding.isnot(None)).all()
-    follows = db.query(Follow).all()
-    [f.entity_value for f in follows if f.entity_type == "author"]
-    
+
+    active_topics = db.query(Topic).filter(Topic.is_active == True, Topic.embedding.isnot(None)).all()  # noqa: E712
     if not active_topics:
         sync_state["message"] = "No active topics."
         return
 
-    # 1. DISCOVERY PHASE
+    # 1. DISCOVERY
     sync_state["message"] = "Discovering papers via Semantic Scholar..."
     sync_state["progress"] = 10
-    
     all_identifiers = set()
-    s2_discovered = await discover_new_papers_s2(active_topics, since)
-    for p in s2_discovered:
+    for p in await discover_new_papers_s2(active_topics, since):
         if p.get("paperId"):
             all_identifiers.add(p["paperId"])
         elif p.get("corpusId"):
             all_identifiers.add(f"CorpusId:{p['corpusId']}")
-        
+
     sync_state["message"] = "Discovering preprints via OAI-PMH..."
     sync_state["progress"] = 25
-    
-    arxiv_ids = await harvest_arxiv_oai(["cs", "q-bio"], since)
-    for aid in arxiv_ids:
-        all_identifiers.add(aid)
-        
-    biorxiv_ids = await harvest_biorxiv_api(since)
-    for bid in biorxiv_ids:
-        all_identifiers.add(f"DOI:{bid}")
-        
+    all_identifiers.update(await harvest_arxiv_oai(["cs", "q-bio"], since))
+    all_identifiers.update(f"DOI:{bid}" for bid in await harvest_biorxiv_api(since))
+
     if sync_state["status"] == "aborted":
         return
-        
-    # Pre-filter to exclude papers we already have in the database
-    existing_s2_ids = {i[0] for i in db.query(Item.source_native_id).filter(Item.source == "semantic_scholar").all()}
-    existing_dois = {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
-    existing_corpus = {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
-    existing_arxiv = {i[0] for i in db.query(Item.source_native_id).filter(Item.source == "arxiv").all()}
-    
-    existing_set = existing_s2_ids | existing_dois | existing_corpus | existing_arxiv
-    
-    identifiers_list = [i for i in all_identifiers if i not in existing_set]
-    
+
+    # Skip everything already in the database before paying for enrichment.
+    existing = {i[0] for i in db.query(Item.source_native_id).all()}
+    existing |= {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
+    existing |= {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
+    identifiers_list = [i for i in all_identifiers if i not in existing]
     if not identifiers_list:
         sync_state["message"] = "No new papers discovered."
         return
-        
-    # 2. ENRICHMENT PHASE
-    sync_state["message"] = f"Enriching {len(identifiers_list)} NEW papers via S2 Batch..."
+
+    # 2. ENRICHMENT
+    sync_state["message"] = f"Enriching {len(identifiers_list)} new papers via S2 batch..."
     sync_state["progress"] = 40
-    
     enriched_papers = await enrich_papers_s2(identifiers_list)
-    
-    sync_state["message"] = "Processing and Scoring papers..."
+
+    # 3. SCORING
+    sync_state["message"] = "Processing and scoring papers..."
     sync_state["progress"] = 60
-    
-    author_follows = [(f.entity_value, f.display_name or f.entity_value, f.boost_value) for f in follows if f.entity_type == "author"]
-    venue_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "venue"}
-    
-    # Calculate Pro and Anti Vectors per Topic
-    from src.models.item_score import ItemScore
-    import numpy as np
-    
-    topic_vectors = {}
-    for topic in active_topics:
-        pro_vector = None
-        anti_vector = None
-        
-        # Pro items (vote >= 1)
-        pro_scores = db.query(ItemScore, Item).join(Item, ItemScore.item_id == Item.id).filter(
-            ItemScore.topic_id == topic.id,
-            ItemScore.user_vote >= 1
-        ).all()
-        pro_embs = [i[1].embedding for i in pro_scores if i[1].embedding and isinstance(i[1].embedding, list) and len(i[1].embedding) == 768]
-        if pro_embs:
-            pro_vector = np.mean(pro_embs, axis=0).tolist()
-            
-        # Anti items (vote == -1)
-        anti_scores = db.query(ItemScore, Item).join(Item, ItemScore.item_id == Item.id).filter(
-            ItemScore.topic_id == topic.id,
-            ItemScore.user_vote == -1
-        ).all()
-        anti_embs = [i[1].embedding for i in anti_scores if i[1].embedding and isinstance(i[1].embedding, list) and len(i[1].embedding) == 768]
-        if anti_embs:
-            anti_vector = np.mean(anti_embs, axis=0).tolist()
-            
-        topic_vectors[topic.id] = {"pro": pro_vector, "anti": anti_vector}
-    
-    total_papers = len(enriched_papers)
+    follows = load_follows(db)
+    topic_vectors = compute_topic_vectors(db, active_topics)
+
+    total = len(enriched_papers)
     for idx, paper in enumerate(enriched_papers):
-        sync_state["message"] = f"Processing and Scoring papers ({idx + 1}/{total_papers})..."
-        sync_state["progress"] = 60 + int((idx / max(1, total_papers)) * 20)
-        
+        sync_state["message"] = f"Processing and scoring papers ({idx + 1}/{total})..."
+        sync_state["progress"] = 60 + int((idx / max(1, total)) * 20)
         if sync_state["status"] == "aborted":
             return
-            
         if not paper:
             continue
-            
-        corpus_id = str(paper.get("corpusId"))
-        doi = paper.get("externalIds", {}).get("DOI")
-        
-        # Deduplication check in DB
+
+        corpus_id = str(paper.get("corpusId")) if paper.get("corpusId") is not None else None
+        external_ids = paper.get("externalIds") or {}
+        doi = external_ids.get("DOI")
+        pmid = external_ids.get("PubMed")
+
         conds = []
-        if corpus_id and corpus_id != "None":
+        if corpus_id:
             conds.append(Item.corpus_id == corpus_id)
         if doi:
             conds.append(Item.doi == doi)
-            
-        existing = None
-        if conds:
-            existing = db.query(Item).filter(or_(*conds)).first()
-            
-        if not existing:
-            existing = db.query(Item).filter(Item.title == paper.get("title", "")).first()
-            
-        if existing:
+        if paper.get("paperId"):
+            conds.append(Item.source_native_id == str(paper["paperId"]))
+        if conds and db.query(Item.id).filter(or_(*conds)).first():
             continue
-            
-        # Parse basic fields
-        title = paper.get("title", "Unknown Title")
-        abstract = paper.get("abstract")
-        pmid = paper.get("externalIds", {}).get("PubMed")
-        
-        if not abstract and (doi or pmid):
-            import httpx
-            import re
-            try:
-                async with httpx.AsyncClient() as client:
-                    # 1. Try CrossRef if DOI exists
-                    if doi:
-                        resp = await client.get(f"https://api.crossref.org/works/{doi}", timeout=5.0)
-                        if resp.status_code == 200:
-                            cr_abs = resp.json().get("message", {}).get("abstract")
-                            if cr_abs:
-                                abstract = re.sub(r'<[^>]+>', '', cr_abs).strip()
-                    
-                    # 2. Try EuropePMC if PMID exists and still no abstract
-                    if not abstract and pmid:
-                        resp = await client.get(f"https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=ext_id:{pmid}&resultType=core&format=json", timeout=5.0)
-                        if resp.status_code == 200:
-                            results = resp.json().get("resultList", {}).get("result", [])
-                            if results and results[0].get("abstractText"):
-                                abstract = re.sub(r'<[^>]+>', '', results[0].get("abstractText")).strip()
-            except Exception as e:
-                print(f"Fallback abstract fetch failed: {e}")
-                
-        abstract = abstract or "No abstract available."
-        authors_list = paper.get("authors", [])
-        author_names_list = [a.get("name") for a in authors_list if a.get("name")]
-        
-        # Get embedding directly from S2 to save GPU compute!
-        emb_obj = paper.get("embedding")
-        item_emb = None
-        if emb_obj and isinstance(emb_obj, dict) and "vector" in emb_obj:
-            item_emb = emb_obj["vector"]
-        else:
-            item_emb = get_embedding(f"{title}. {abstract}")
-            
-        # Yield to event loop
-        await asyncio.sleep(0)
-        
-        # Follow Boosts
-        boost = 0.0
-        reasons = []
-        item_authors_str = [a.lower() for a in author_names_list]
-        for entity_val, disp_name, boost_val in author_follows:
-            matched = False
-            
-            if entity_val.startswith("AUTHOR_ID:"):
-                aid = entity_val.split(":")[1]
-                if any(str(a.get("authorId")) == aid for a in authors_list):
-                    matched = True
-            elif entity_val.startswith("ORCID:"):
-                orcid = entity_val.split(":")[1]
-                if any(orcid in str(a.get("externalIds", {}).get("ORCID", "")) for a in authors_list):
-                    matched = True
-            else:
-                # Legacy string match
-                if any(entity_val.lower() in name for name in item_authors_str):
-                    matched = True
-                    
-            if matched:
-                boost += boost_val
-                reasons.append(f"Followed author boost (+{boost_val})")
-                
-        venue_name = paper.get("venue")
-        if venue_name:
-            item_venue = venue_name.lower()
-            for venue, boost_val in venue_follows.items():
-                if venue in item_venue:
-                    boost += boost_val
-                    reasons.append(f"Followed venue boost (+{boost_val})")
-                    
-            # High-impact journal boost
-            if item_venue in HIGH_IMPACT_JOURNALS:
-                journal_boost = HIGH_IMPACT_JOURNALS[item_venue]
-                boost += journal_boost
-                reasons.append(f"High-impact journal boost (+{journal_boost})")
-                
-        # Semantic Scoring against Topics
-        topic_scores = []
-        max_final_score = 0.0
-        
-        for topic in active_topics:
-            if topic.embedding and item_emb:
-                raw_sim = compute_cosine_similarity(item_emb, topic.embedding)
-                # Calibrate Specter V2 embeddings: random papers ~0.72, highly related ~0.88+
-                sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
-                
-                topic_specific_reasons = []
-                
-                pro_vector = topic_vectors.get(topic.id, {}).get("pro")
-                anti_vector = topic_vectors.get(topic.id, {}).get("anti")
-                
-                # Apply Active Learning (Pro/Anti Vectors)
-                if pro_vector:
-                    pro_sim = compute_cosine_similarity(item_emb, pro_vector)
-                    if pro_sim > 0.80:
-                        boost_amount = min(0.3, (pro_sim - 0.80) * 2.0)
-                        sim = min(1.0, sim + boost_amount)
-                        topic_specific_reasons.append(f"Pro-topic similarity (+{boost_amount:.2f})")
-                        
-                if anti_vector:
-                    anti_sim = compute_cosine_similarity(item_emb, anti_vector)
-                    if anti_sim > 0.80:
-                        penalty = min(0.5, (anti_sim - 0.80) * 3.0)
-                        sim = max(0.0, sim - penalty)
-                        topic_specific_reasons.append(f"Anti-topic penalty (-{penalty:.2f})")
-                
-                # Topic-specific Keyword Boosting
-                topic_boost = 0.0
-                if topic.keywords:
-                    kws = [k.strip().lower() for k in topic.keywords.split(",")]
-                    paper_title = paper.get("title", "").lower() if paper.get("title") else ""
-                    paper_abs = paper.get("abstract", "").lower() if paper.get("abstract") else ""
-                    for kw in kws:
-                        if not kw: continue
-                        # allow singular/plural loose matching
-                        kw_base = kw[:-1] if kw.endswith('s') else kw
-                        
-                        if kw_base in paper_title:
-                            topic_boost += 0.15
-                            topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
-                        elif kw_base in paper_abs:
-                            topic_boost += 0.10
-                            topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
+        if paper.get("title") and db.query(Item.id).filter(Item.title == paper["title"]).first():
+            continue
 
-                final_score = min(1.0, sim + boost + topic_boost)
-                
-                if final_score > max_final_score:
-                    max_final_score = final_score
-                    
-                if final_score >= 0.20 or boost > 0.0 or topic_boost > 0.0:
-                    combined_reasons = [f"Semantic match to '{topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
-                    topic_scores.append({
-                        "topic_id": topic.id,
-                        "semantic_score": sim,
-                        "final_score": final_score,
-                        "reasons": combined_reasons
-                    })
-                    
-        # Filter low relevance
-        if max_final_score < 0.20 and boost == 0.0:
+        title = paper.get("title") or "Unknown Title"
+        abstract = paper.get("abstract") or await _fetch_missing_abstract(doi, pmid) or "No abstract available."
+        paper["abstract"] = abstract
+
+        features = Paper.from_s2(paper)
+        if features.embedding is None:
+            # Semantic Scholar had no SPECTER2 vector: compute one locally.
+            features.embedding = get_embedding(f"{title}. {abstract}")
+        await asyncio.sleep(0)  # yield to the event loop between papers
+
+        topic_scores, max_final, boost = score_paper(features, active_topics, topic_vectors, follows)
+        if not should_keep(max_final, boost):
             continue
-            
-        # Parse Dates
-        pub_date_str = paper.get("publicationDate")
-        pub_year = paper.get("year")
-        published_at = datetime.now(timezone.utc)
-        
-        if pub_date_str:
-            try:
-                published_at = datetime.strptime(pub_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            except ValueError:
-                pass
-                
-        # Fallbacks for missing precise dates
-        if not pub_date_str and pub_year:
-            # If the year is older than current year, assume Jan 1st of that year
-            # If it's the current year, we leave it as "now" so it surfaces as a new paper in the feed!
-            if pub_year < published_at.year:
-                published_at = datetime(pub_year, 1, 1, tzinfo=timezone.utc)
-            
-        # Extract rich metadata
-        orcid_list = [a.get("externalIds", {}).get("ORCID") for a in authors_list if "ORCID" in a.get("externalIds", {})]
+
         tldr_obj = paper.get("tldr")
-        t1_tldr = tldr_obj.get("text") if tldr_obj else None
-        
-        author_details = []
-        for a in authors_list:
-            if a.get("name"):
-                author_details.append({
-                    "name": a.get("name"),
-                    "authorId": a.get("authorId"),
-                    "orcid": a.get("externalIds", {}).get("ORCID") if a.get("externalIds") else None
-                })
-                
         db_item = Item(
             source="SemanticScholar",
             source_native_id=str(paper.get("paperId")),
             corpus_id=corpus_id,
             title=title,
             abstract=abstract,
-            authors=author_names_list,
-            author_details=author_details,
-            published_at=published_at,
+            authors=[a["name"] for a in features.authors],
+            author_details=features.authors,
+            published_at=_parse_published_at(paper),
             url=paper.get("url") or "",
             doi=doi,
-            pmid=paper.get("externalIds", {}).get("PubMed"),
-            orcid_list=orcid_list,
-            venue=venue_name,
+            pmid=pmid,
+            orcid_list=[a["orcid"] for a in features.authors if a.get("orcid")],
+            venue=features.venue,
             citation_count=paper.get("citationCount", 0),
             reference_count=paper.get("referenceCount", 0),
             influential_citation_count=paper.get("influentialCitationCount", 0),
             is_open_access=paper.get("isOpenAccess", False),
-            open_access_pdf_url=paper.get("openAccessPdf", {}).get("url") if paper.get("openAccessPdf") else None,
+            open_access_pdf_url=(paper.get("openAccessPdf") or {}).get("url"),
             citation_styles=paper.get("citationStyles"),
-            t1_tldr=t1_tldr,
-            embedding=item_emb,
-            raw_metadata_json=paper
+            t1_tldr=tldr_obj.get("text") if tldr_obj else None,
+            embedding=features.embedding,
+            raw_metadata_json=paper,
         )
-        
         db.add(db_item)
-        db.flush() # flush to get item.id
-        
+        db.flush()
         for ts in topic_scores:
-            score = ItemScore(item_id=db_item.id, **ts)
-            db.add(score)
-            
+            db.add(ItemScore(item_id=db_item.id, topic_id=ts.topic_id, semantic_score=ts.semantic_score, final_score=ts.final_score, reasons=ts.reasons))
+
     db.commit()
+
+
+def cleanup_old_items(db: Session) -> int:
+    """Delete papers older than CLEANUP_AFTER that carry no user signal.
+
+    Starred papers and anything the user voted on (even a downvote) are kept:
+    they are the training data for the ranker.
+    """
+    cutoff = datetime.now(timezone.utc) - CLEANUP_AFTER
+    voted_ids = db.query(ItemScore.item_id).filter(ItemScore.user_vote.isnot(None))
+    stale_ids = [
+        i[0]
+        for i in db.query(Item.id)
+        .filter(Item.published_at < cutoff, Item.is_starred == False, ~Item.id.in_(voted_ids))  # noqa: E712
+        .all()
+    ]
+    if not stale_ids:
+        return 0
+    deleted = 0
+    for start in range(0, len(stale_ids), 500):
+        chunk = stale_ids[start : start + 500]
+        db.query(ItemScore).filter(ItemScore.item_id.in_(chunk)).delete(synchronize_session=False)
+        deleted += db.query(Item).filter(Item.id.in_(chunk)).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+
+def _finish_sync(db: Session) -> None:
+    sync_state["status"] = "idle"
+    sync_state["message"] = "Sync Complete!"
+    sync_state["progress"] = 100
+    now_iso = datetime.now(timezone.utc).isoformat()
+    entry = db.query(AppConfig).filter(AppConfig.key == "last_synced_at").first()
+    if entry:
+        entry.value = now_iso
+    else:
+        db.add(AppConfig(key="last_synced_at", value=now_iso))
+    db.commit()
+
+
+def _aborted() -> bool:
+    if sync_state["status"] == "aborted":
+        sync_state["status"] = "idle"
+        sync_state["progress"] = 0
+        sync_state["message"] = "Sync Aborted"
+        return True
+    return False
+
+
+async def full_sync(db: Session, days_back: int = 3) -> None:
+    """Ingest, clean up, summarize. Shared by the manual trigger and the scheduler."""
+    try:
+        await run_ingestion(db, days_back=days_back)
+        if _aborted():
+            return
+        sync_state["message"] = "Cleaning up old DB items..."
+        sync_state["progress"] = 80
+        print(f"Cleaned up {cleanup_old_items(db)} old unstarred, unvoted items.")
+        sync_state["message"] = "Running LLM summaries (this may take a while)..."
+        sync_state["progress"] = 90
+        await run_summarization_pipeline(db)
+        if _aborted():
+            return
+        _finish_sync(db)
+    except Exception as e:
+        sync_state["status"] = "error"
+        sync_state["message"] = f"Error during sync: {e}"
+
 
 @router.post("/fetch", response_model=dict)
 async def trigger_fetch(background_tasks: BackgroundTasks):
     """Manually trigger ingestion from all sources in the background."""
-    global sync_state
-    if sync_state["status"] == "running":
+    if sync_state["status"] in ("running", "paused"):
         return {"status": "error", "message": "Sync is already running"}
-        
-    async def full_sync_task():
-        global sync_state
-        # We need a new session for the background task
+
+    async def task():
         from src.database import SessionLocal
+
         db = SessionLocal()
         try:
-            await run_ingestion(db)
-            
-            if sync_state["status"] == "aborted":
-                sync_state["status"] = "idle"
-                sync_state["progress"] = 0
-                sync_state["message"] = "Sync Aborted"
-                return
-
-            sync_state["message"] = "Cleaning up old DB items..."
-            sync_state["progress"] = 80
-            
-            # 8-week DB Cleanup
-            eight_weeks_ago = datetime.now(timezone.utc) - timedelta(weeks=8)
-            deleted_count = db.query(Item).filter(Item.published_at < eight_weeks_ago, not Item.is_starred).delete()
-            db.commit()
-            print(f"Cleaned up {deleted_count} old unstarred items.")
-            
-            sync_state["message"] = "Running LLM summaries (this may take a while)..."
-            sync_state["progress"] = 90
-            
-            # Await the pipeline so we know when it's totally done
-            await run_summarization_pipeline(db)
-            
-            if sync_state["status"] == "aborted":
-                sync_state["status"] = "idle"
-                sync_state["progress"] = 0
-                sync_state["message"] = "Sync Aborted"
-                return
-                
-            sync_state["status"] = "idle"
-            sync_state["message"] = "Sync Complete!"
-            sync_state["progress"] = 100
-            
-            # Save last_synced_at
-            now_iso = datetime.now(timezone.utc).isoformat()
-            config_entry = db.query(AppConfig).filter(AppConfig.key == "last_synced_at").first()
-            if config_entry:
-                config_entry.value = now_iso
-            else:
-                db.add(AppConfig(key="last_synced_at", value=now_iso))
-            db.commit()
-        except Exception as e:
-            sync_state["status"] = "error"
-            sync_state["message"] = f"Error during sync: {e}"
+            await full_sync(db)
         finally:
             db.close()
 
-    background_tasks.add_task(full_sync_task)
+    background_tasks.add_task(task)
     return {"status": "success", "message": "Fetch started in background"}
+
 
 @router.get("/progress", response_model=dict)
 def get_progress():
     return sync_state
 
+
 @router.get("/", response_model=List[dict])
 def get_items(skip: int = 0, limit: int = 100, topic_id: Optional[str] = None, show_acknowledged: bool = False, db: Session = Depends(get_db)):
-    query = db.query(Item, ItemScore.final_score, ItemScore.user_vote).outerjoin(
-        ItemScore, Item.id == ItemScore.item_id
-    )
-    
+    query = db.query(Item, ItemScore.final_score, ItemScore.user_vote, ItemScore.topic_id).outerjoin(ItemScore, Item.id == ItemScore.item_id)
     if topic_id:
         query = query.filter(ItemScore.topic_id == topic_id).order_by(desc(ItemScore.final_score))
     else:
         query = query.order_by(desc(Item.published_at))
-        
     if not show_acknowledged:
-        query = query.filter(Item.is_acknowledged == False)
-        
-    results = query.offset(skip).limit(limit).all()
-    
-    items_dict = {}
-    
-    for row in results:
-        item = row[0]
-        score = row[1]
-        vote = row[2]
-        
-        if item.id not in items_dict:
-            d = {**item.__dict__}
-            d.pop("_sa_instance_state", None)
-            d["score"] = score
-            d["user_vote"] = vote
-            items_dict[item.id] = d
-        else:
-            # If multiple topics, prefer the highest score and preserve vote if present
-            if score is not None and (items_dict[item.id].get("score") is None or score > items_dict[item.id]["score"]):
-                items_dict[item.id]["score"] = score
+        query = query.filter(Item.is_acknowledged == False)  # noqa: E712
+
+    items: dict[str, dict] = {}
+    for item, score, vote, tid in query.offset(skip).limit(limit).all():
+        if item.id not in items:
+            items[item.id] = item_to_dict(item, score, vote, tid)
+        elif score is not None and (items[item.id].get("score") is None or score > items[item.id]["score"]):
+            items[item.id]["score"] = score
+            items[item.id]["topic_id"] = tid
             if vote is not None:
-                items_dict[item.id]["user_vote"] = vote
-        
-    # Preserve order of the results
-    items = []
-    seen = set()
-    for row in results:
-        item_id = row[0].id
-        if item_id not in seen:
-            items.append(items_dict[item_id])
-            seen.add(item_id)
-            
-    return items
+                items[item.id]["user_vote"] = vote
+    return list(items.values())
+
+
+def _library(db: Session, flag_column, default_vote: int) -> List[dict]:
+    """Starred / discarded listing with the vote and topic that produced it."""
+    items = db.query(Item).filter(flag_column == True).order_by(desc(Item.published_at)).all()  # noqa: E712
+    results = []
+    for item in items:
+        score = (
+            db.query(ItemScore)
+            .filter(ItemScore.item_id == item.id)
+            .order_by(ItemScore.user_vote.isnot(None).desc(), ItemScore.final_score.desc())
+            .first()
+        )
+        vote = score.user_vote if score and score.user_vote is not None else default_vote
+        results.append(item_to_dict(item, score.final_score if score else None, vote, score.topic_id if score else None))
+    return results
+
 
 @router.get("/starred", response_model=List[dict])
 def get_starred_items(db: Session = Depends(get_db)):
-    items = db.query(Item).filter(Item.is_starred).order_by(desc(Item.published_at)).all()
-    results = []
-    for item in items:
-        d = {**item.__dict__}
-        d.pop("_sa_instance_state", None)
-        
-        # Get the first score's user_vote if available, otherwise default to 2
-        score = db.query(ItemScore).filter(ItemScore.item_id == item.id).first()
-        d["user_vote"] = score.user_vote if score and score.user_vote is not None else 2
-        results.append(d)
-    return results
+    return _library(db, Item.is_starred, default_vote=2)
+
 
 @router.get("/discarded", response_model=List[dict])
 def get_discarded_items(db: Session = Depends(get_db)):
-    items = db.query(Item).filter(Item.is_hidden).order_by(desc(Item.published_at)).all()
-    results = []
-    for item in items:
-        d = {**item.__dict__}
-        d.pop("_sa_instance_state", None)
-        
-        # Get the first score's user_vote if available, otherwise default to -1
-        score = db.query(ItemScore).filter(ItemScore.item_id == item.id).first()
-        d["user_vote"] = score.user_vote if score and score.user_vote is not None else -1
-        results.append(d)
-    return results
+    return _library(db, Item.is_hidden, default_vote=-1)
+
+
+def _set_flag(db: Session, item_id: str, **flags) -> dict:
+    item = db.query(Item).filter(Item.id == item_id).first()
+    if not item:
+        return {"status": "error", "message": "Item not found"}
+    for key, value in flags.items():
+        setattr(item, key, value)
+    db.commit()
+    return {"status": "success"}
+
 
 @router.put("/{item_id}/acknowledge", response_model=dict)
 def acknowledge_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_acknowledged = True
-    db.commit()
-    return {"status": "success"}
+    return _set_flag(db, item_id, is_acknowledged=True)
+
 
 @router.put("/{item_id}/unacknowledge", response_model=dict)
 def unacknowledge_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_acknowledged = False
-    db.commit()
-    return {"status": "success"}
+    return _set_flag(db, item_id, is_acknowledged=False)
+
 
 @router.put("/{item_id}/star", response_model=dict)
 def star_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_starred = True
-    db.commit()
-    return {"status": "success"}
+    return _set_flag(db, item_id, is_starred=True)
+
 
 @router.put("/{item_id}/unstar", response_model=dict)
 def unstar_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_starred = False
-    db.commit()
-    return {"status": "success"}
+    return _set_flag(db, item_id, is_starred=False)
+
 
 @router.put("/{item_id}/hide", response_model=dict)
 def hide_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_hidden = True
-    db.commit()
-    return {"status": "success"}
+    return _set_flag(db, item_id, is_hidden=True)
+
+
+@router.put("/{item_id}/unhide", response_model=dict)
+def unhide_item(item_id: str, db: Session = Depends(get_db)):
+    return _set_flag(db, item_id, is_hidden=False)
+
 
 @router.delete("/unstarred", response_model=dict)
 def clear_unstarred(db: Session = Depends(get_db)):
+    """Delete every paper that is neither starred nor voted on."""
     try:
-        # Delete items that are NOT starred
-        # We also need to delete their ItemScores, but SQLAlchemy handles that via cascade if configured,
-        # or we can delete them explicitly if not.
-        from src.models.item_score import ItemScore
-        
-        # First find unstarred item IDs
-        unstarred_items = db.query(Item.id).filter(Item.is_starred == False).all()
-        unstarred_ids = [i[0] for i in unstarred_items]
-        
-        if not unstarred_ids:
-            return {"status": "success", "deleted": 0}
-            
-        # Delete scores first (to avoid foreign key constraint issues if cascade is not set)
-        db.query(ItemScore).filter(ItemScore.item_id.in_(unstarred_ids)).delete(synchronize_session=False)
-        
-        # Delete items
-        deleted_count = db.query(Item).filter(Item.id.in_(unstarred_ids)).delete(synchronize_session=False)
-        
+        voted_ids = db.query(ItemScore.item_id).filter(ItemScore.user_vote.isnot(None))
+        ids = [i[0] for i in db.query(Item.id).filter(Item.is_starred == False, ~Item.id.in_(voted_ids)).all()]  # noqa: E712
+        deleted = 0
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            db.query(ItemScore).filter(ItemScore.item_id.in_(chunk)).delete(synchronize_session=False)
+            deleted += db.query(Item).filter(Item.id.in_(chunk)).delete(synchronize_session=False)
         db.commit()
-        return {"status": "success", "deleted": deleted_count}
+        return {"status": "success", "deleted": deleted}
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}
 
+
 class BulkRescoreRequest(BaseModel):
     item_ids: List[str]
+
 
 @router.post("/bulk_rescore", response_model=dict)
 async def bulk_rescore(req: BulkRescoreRequest, db: Session = Depends(get_db)):
     items = db.query(Item).filter(Item.id.in_(req.item_ids)).all()
     if not items:
         return {"status": "error", "message": "No items found"}
-        
-    # Attempt to fetch missing abstracts/embeddings from Semantic Scholar
-    missing_items = [item for item in items if (not item.abstract or item.abstract == "No abstract available.") or not item.embedding]
-    if missing_items:
-        identifiers = []
-        item_map = {}
-        for item in missing_items:
+
+    # Fill in missing abstracts / embeddings from Semantic Scholar first.
+    missing = [i for i in items if not i.abstract or i.abstract == "No abstract available." or not i.embedding]
+    if missing:
+        identifiers, item_map = [], {}
+        for item in missing:
             if item.corpus_id:
-                id_str = f"CorpusId:{item.corpus_id}"
-                identifiers.append(id_str)
-                item_map[id_str] = item
+                key = f"CorpusId:{item.corpus_id}"
             elif item.doi:
-                id_str = f"DOI:{item.doi}"
-                identifiers.append(id_str)
-                item_map[id_str] = item
-            elif item.source == "semantic_scholar" and item.source_native_id:
-                id_str = item.source_native_id
-                identifiers.append(id_str)
-                item_map[id_str] = item
-                
+                key = f"DOI:{item.doi}"
+            elif item.source_native_id:
+                key = item.source_native_id
+            else:
+                continue
+            identifiers.append(key)
+            item_map[key] = item
         if identifiers:
             try:
-                enriched = await enrich_papers_s2(identifiers)
-                for paper_data in enriched:
-                    pid = paper_data.get("paperId")
-                    cid = paper_data.get("corpusId")
-                    doi = paper_data.get("externalIds", {}).get("DOI")
-                    
-                    matching_item = None
-                    if cid and f"CorpusId:{cid}" in item_map:
-                        matching_item = item_map[f"CorpusId:{cid}"]
-                    elif pid and pid in item_map:
-                        matching_item = item_map[pid]
-                    elif doi and f"DOI:{doi}" in item_map:
-                        matching_item = item_map[f"DOI:{doi}"]
-                        
-                    if matching_item:
-                        if paper_data.get("abstract"):
-                            matching_item.abstract = paper_data.get("abstract")
-                        if paper_data.get("embedding") and paper_data["embedding"].get("specter_v2"):
-                            matching_item.embedding = paper_data["embedding"]["specter_v2"]
+                for data in await enrich_papers_s2(identifiers):
+                    if not data:
+                        continue
+                    cid = data.get("corpusId")
+                    doi = (data.get("externalIds") or {}).get("DOI")
+                    match = item_map.get(f"CorpusId:{cid}") or item_map.get(str(data.get("paperId"))) or item_map.get(f"DOI:{doi}")
+                    if not match:
+                        continue
+                    if data.get("abstract"):
+                        match.abstract = data["abstract"]
+                    emb = data.get("embedding")
+                    if isinstance(emb, dict) and emb.get("vector"):
+                        match.embedding = emb["vector"]
                 db.commit()
             except Exception as e:
                 print(f"Failed to enrich missing items during rescore: {e}")
-        
-    active_topics = db.query(Topic).filter(Topic.is_active == True).all()
-    topic_vectors = {}
-    for topic in active_topics:
-        topic_vectors[topic.id] = {}
-        pro_votes = db.query(Item.embedding).join(ItemScore).filter(
-            ItemScore.topic_id == topic.id,
-            ItemScore.user_vote > 0,
-            Item.embedding.isnot(None)
-        ).all()
-        if pro_votes:
-            vecs = [v[0] for v in pro_votes]
-            avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
-            magnitude = sum(x*x for x in avg_vec)**0.5
-            topic_vectors[topic.id]["pro"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
-            
-        anti_votes = db.query(Item.embedding).join(ItemScore).filter(
-            ItemScore.topic_id == topic.id,
-            ItemScore.user_vote < 0,
-            Item.embedding.isnot(None)
-        ).all()
-        if anti_votes:
-            vecs = [v[0] for v in anti_votes]
-            avg_vec = [sum(x)/len(vecs) for x in zip(*vecs)]
-            magnitude = sum(x*x for x in avg_vec)**0.5
-            topic_vectors[topic.id]["anti"] = [x/magnitude for x in avg_vec] if magnitude > 0 else avg_vec
+
+    active_topics = db.query(Topic).filter(Topic.is_active == True).all()  # noqa: E712
+    follows = load_follows(db)
+    topic_vectors = compute_topic_vectors(db, active_topics)
 
     for item in items:
-        if not item.embedding:
+        features = Paper.from_item(item)
+        if features.embedding is None:
             continue
-            
-        boost = 0.0
-        reasons = []
-        if item.venue:
-            venue_lower = item.venue.lower()
-            journal_boost = HIGH_IMPACT_JOURNALS.get(venue_lower, 0.0)
-            if journal_boost > 0.0:
-                boost += journal_boost
-                reasons.append(f"High-impact journal boost (+{journal_boost})")
-
-        for topic in active_topics:
-            if not topic.embedding:
-                continue
-                
-            raw_sim = compute_cosine_similarity(item.embedding, topic.embedding)
-            sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
-            
-            topic_specific_reasons = []
-            pro_vector = topic_vectors.get(topic.id, {}).get("pro")
-            anti_vector = topic_vectors.get(topic.id, {}).get("anti")
-            
-            if pro_vector:
-                pro_sim = compute_cosine_similarity(item.embedding, pro_vector)
-                if pro_sim > 0.80:
-                    boost_amount = min(0.3, (pro_sim - 0.80) * 2.0)
-                    sim = min(1.0, sim + boost_amount)
-                    topic_specific_reasons.append(f"Pro-topic similarity (+{boost_amount:.2f})")
-                    
-            if anti_vector:
-                anti_sim = compute_cosine_similarity(item.embedding, anti_vector)
-                if anti_sim > 0.80:
-                    penalty = min(0.5, (anti_sim - 0.80) * 3.0)
-                    sim = max(0.0, sim - penalty)
-                    topic_specific_reasons.append(f"Anti-topic penalty (-{penalty:.2f})")
-            
-            topic_boost = 0.0
-            if topic.keywords:
-                kws = [k.strip().lower() for k in topic.keywords.split(",")]
-                paper_title = item.title.lower() if item.title else ""
-                paper_abs = item.abstract.lower() if item.abstract else ""
-                for kw in kws:
-                    if not kw: continue
-                    kw_base = kw[:-1] if kw.endswith('s') else kw
-                    if kw_base in paper_title:
-                        topic_boost += 0.15
-                        topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
-                    elif kw_base in paper_abs:
-                        topic_boost += 0.10
-                        topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
-
-            final_score = min(1.0, sim + boost + topic_boost)
-            
-            score_entry = db.query(ItemScore).filter(ItemScore.item_id == item.id, ItemScore.topic_id == topic.id).first()
-            if not score_entry:
-                score_entry = ItemScore(item_id=item.id, topic_id=topic.id)
-                db.add(score_entry)
-                
-            score_entry.semantic_score = sim
-            score_entry.final_score = final_score
-            score_entry.reasons = [f"Semantic match to '{topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
-
+        topic_scores, _max_final, _boost = score_paper(features, active_topics, topic_vectors, follows)
+        for ts in topic_scores:
+            entry = db.query(ItemScore).filter(ItemScore.item_id == item.id, ItemScore.topic_id == ts.topic_id).first()
+            if not entry:
+                entry = ItemScore(item_id=item.id, topic_id=ts.topic_id)
+                db.add(entry)
+            entry.semantic_score = ts.semantic_score
+            entry.final_score = ts.final_score
+            entry.reasons = ts.reasons
     db.commit()
     return {"status": "success"}
 
-@router.put("/{item_id}/unhide", response_model=dict)
-def unhide_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(Item).filter(Item.id == item_id).first()
-    if not item:
-        return {"status": "error", "message": "Item not found"}
-    
-    item.is_hidden = False
-    db.commit()
-    return {"status": "success"}
-
-from pydantic import BaseModel
-from typing import Optional
 
 class VoteRequest(BaseModel):
     topic_id: Optional[str] = None
-    vote: Optional[int] = None # None: Unrated, 2: Star, 1: Up, 0: Neutral, -1: Down
+    vote: Optional[int] = None  # None: Unrated, 2: Star, 1: Up, 0: Neutral, -1: Down
+
 
 @router.post("/{item_id}/vote", response_model=dict)
 def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)):
+    """Record a vote.
+
+    The vote is training signal for exactly one topic: the one passed in, or,
+    when voting from the overview feed, the topic that gave the item its best
+    score. It is never written to every topic the item happens to match, so
+    research topics do not learn from each other's feedback.
+    """
     item = db.query(Item).filter(Item.id == item_id).first()
     if not item:
         return {"status": "error", "message": "Item not found"}
-        
+
     if vote_req.vote is None:
         item.is_acknowledged = False
         item.is_starred = False
         item.is_hidden = False
     else:
-        # Set acknowledged so it hides globally
         item.is_acknowledged = True
-        
-        # If Star (2), also set is_starred globally for Zotero
-        if vote_req.vote == 2:
-            item.is_starred = True
-            item.is_hidden = False
-        elif vote_req.vote == -1:
-            # Also set is_hidden globally
-            item.is_hidden = True
-            item.is_starred = False
-        elif vote_req.vote in [1, 0]:
-            # Normal read or upvote
-            item.is_hidden = False
-            item.is_starred = False
-        
-    from src.models.item_score import ItemScore
-    
+        item.is_starred = vote_req.vote == 2
+        item.is_hidden = vote_req.vote == -1
+
+    scores = db.query(ItemScore).filter(ItemScore.item_id == item_id).all()
+    target: Optional[ItemScore] = None
     if vote_req.topic_id:
-        score = db.query(ItemScore).filter(ItemScore.item_id == item_id, ItemScore.topic_id == vote_req.topic_id).first()
-        if score:
-            score.user_vote = vote_req.vote
-    else:
-        scores = db.query(ItemScore).filter(ItemScore.item_id == item_id).all()
-        for score in scores:
-            score.user_vote = vote_req.vote
-            
+        target = next((s for s in scores if s.topic_id == vote_req.topic_id), None)
+    elif scores:
+        target = max(scores, key=lambda s: s.final_score or 0.0)
+
+    if vote_req.vote is None:
+        # Un-rating clears the signal everywhere so nothing stale lingers.
+        for s in scores:
+            s.user_vote = None
+    elif target is not None:
+        target.user_vote = vote_req.vote
+
     db.commit()
-    return {"status": "success"}
+    return {"status": "success", "topic_id": target.topic_id if target else None}

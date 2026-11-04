@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
-import type { Topic } from './types'
+import type { Topic, SyncProgress, Settings as AppSettings } from './types'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import axios from 'axios'
 import Feed from './pages/Feed'
 import Settings from './pages/Settings'
@@ -13,39 +13,63 @@ import Help from './pages/Help'
 const queryClient = new QueryClient()
 
 const fetchSyncProgress = async () => {
-  const { data } = await axios.get('http://localhost:8001/items/progress')
+  const { data } = await axios.get('/items/progress')
   return data
 }
 
 const fetchSettings = async () => {
-  const { data } = await axios.get('http://localhost:8001/settings/')
+  const { data } = await axios.get('/settings/')
   return data
 }
 
 const fetchTopics = async () => {
-  const { data } = await axios.get('http://localhost:8001/topics/')
+  const { data } = await axios.get('/topics/')
   return data
 }
 
-function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints, setShowPreprints, searchQuery, setSearchQuery, minScore, setMinScore }: any) {
-  const { data: topics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
-  const { data: syncProgress } = useQuery({ queryKey: ['syncProgress'], queryFn: fetchSyncProgress, refetchInterval: (data: any) => (data?.status === 'running' || data?.status === 'paused') ? 2000 : false })
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: fetchSettings })
-  const [, setTick] = useState(0)
+interface FeedControls {
+  showRated: boolean;
+  setShowRated: (v: boolean) => void;
+  showPreprints: boolean;
+  setShowPreprints: (v: boolean) => void;
+  searchQuery: string;
+  setSearchQuery: (v: string) => void;
+  minScore: number;
+  setMinScore: (v: number) => void;
+}
+
+interface SidebarProps extends FeedControls {
+  isMobileOpen: boolean;
+  onClose: () => void;
+}
+
+function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints, setShowPreprints, searchQuery, setSearchQuery, minScore, setMinScore }: SidebarProps) {
+  const { data: topics } = useQuery<Topic[]>({ queryKey: ['topics'], queryFn: fetchTopics })
+  const { data: syncProgress } = useQuery<SyncProgress>({
+    queryKey: ['syncProgress'],
+    queryFn: fetchSyncProgress,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status === 'running' || status === 'paused' ? 2000 : false
+    },
+  })
+  const { data: settings } = useQuery<AppSettings>({ queryKey: ['settings'], queryFn: fetchSettings })
+  // Re-render once a minute so "last fetched" stays fresh without reading the clock during render.
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    const timer = setInterval(() => setTick(t => t + 1), 60000)
+    const timer = setInterval(() => setNow(Date.now()), 60000)
     return () => clearInterval(timer)
   }, [])
 
   const handleFetch = async () => {
     if (syncProgress?.status === 'running' || syncProgress?.status === 'paused') return
-    await axios.post('http://localhost:8001/items/fetch')
+    await axios.post('/items/fetch')
     queryClient.invalidateQueries({ queryKey: ['syncProgress'] })
   }
 
   function formatTimeAgo(isoString: string) {
-    const diffMs = Date.now() - new Date(isoString).getTime();
+    const diffMs = now - new Date(isoString).getTime();
     const diffMins = Math.round(diffMs / 60000);
     if (diffMins < 60) return `${diffMins} mins ago`;
     const diffHrs = Math.round(diffMins / 60);
@@ -100,6 +124,9 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
           </NavLink>
           <NavLink to="/starred" onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
             Starred Library
+          </NavLink>
+          <NavLink to="/discarded" onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
+            Discarded
           </NavLink>
           <NavLink to="/settings" onClick={onClose} className={({ isActive }) => `flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors ${isActive ? 'bg-primary text-primary-foreground font-medium shadow-sm' : 'hover:bg-muted/50 text-foreground/80 hover:text-foreground'}`}>
             Settings
@@ -177,7 +204,7 @@ function Sidebar({ isMobileOpen, onClose, showRated, setShowRated, showPreprints
   )
 }
 
-function Layout({ children, showRated, setShowRated, showPreprints, setShowPreprints, searchQuery, setSearchQuery, minScore, setMinScore }: any) {
+function Layout({ children, showRated, setShowRated, showPreprints, setShowPreprints, searchQuery, setSearchQuery, minScore, setMinScore }: FeedControls & { children: React.ReactNode }) {
   const [isMobileOpen, setIsMobileOpen] = useState(false)
 
   return (
@@ -187,7 +214,7 @@ function Layout({ children, showRated, setShowRated, showPreprints, setShowPrepr
         <button onClick={() => setIsMobileOpen(true)} className="p-2 mr-3 bg-muted/50 rounded-md">
           ☰
         </button>
-        <span className="font-bold tracking-tight">PUBLIKATER</span>
+        <span className="font-bold tracking-tight">PUBLICAT</span>
       </div>
 
       <Sidebar isMobileOpen={isMobileOpen} onClose={() => setIsMobileOpen(false)} showRated={showRated} setShowRated={setShowRated} showPreprints={showPreprints} setShowPreprints={setShowPreprints} searchQuery={searchQuery} setSearchQuery={setSearchQuery} minScore={minScore} setMinScore={setMinScore} />

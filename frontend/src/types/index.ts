@@ -28,6 +28,20 @@ export interface Item {
   is_acknowledged: boolean;
   is_starred: boolean;
   is_hidden: boolean;
+  /** Relevance for the topic in `topic_id` (best topic on the overview). */
+  score?: number;
+  user_vote?: number | null;
+  /** The topic a vote on this card is attributed to. */
+  topic_id?: string | null;
+  topic_name?: string | null;
+}
+
+export type Vote = 2 | 1 | 0 | -1 | null
+
+export interface VotePayload {
+  id: string;
+  vote: Vote;
+  topicId?: string | null;
 }
 
 export interface Topic {
@@ -54,6 +68,12 @@ export interface SyncProgress {
 }
 
 export interface Settings {
+  gemini_api_key: string;
+  anthropic_api_key: string;
+  s2_api_key: string;
+  anthropic_budget_limit: number;
+  enable_llm_reranking: boolean;
+  reranking_mode: string;
   last_synced_at?: string;
 }
 

@@ -26,7 +26,7 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"summary": "...", "score": 8}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -59,7 +59,7 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"summary": "...", "tools": ["Tool1", "Tool2"]}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -83,7 +83,7 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"tools": ["Keyword1", "Keyword2"]}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -110,7 +110,7 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"score": 85, "reason": "The paper directly addresses the topic by investigating..."}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -125,7 +125,7 @@ Respond ONLY with a valid JSON object matching this schema:
 
     async def generate(self, prompt: str) -> str:
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
             )

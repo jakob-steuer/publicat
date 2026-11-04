@@ -1,12 +1,13 @@
 import type { Topic, Follow, SyncProgress, Dashboard } from '../types'
 import { Sun, Moon } from 'lucide-react'
+import { absoluteApiUrl } from '../lib/api'
 
 interface FilterBarProps {
   authorId?: string;
   topicId?: string;
   follows: Follow[];
   topics: Topic[];
-  dashboard: Dashboard;
+  dashboard?: Dashboard;
   syncProgress?: SyncProgress;
   handleSyncControl: (action: 'pause' | 'resume' | 'abort') => void;
   isDark: boolean;
@@ -43,9 +44,9 @@ export function FilterBar({
         <div className="flex flex-wrap items-center justify-end w-full md:w-auto gap-3">
           <button 
             onClick={() => {
-              const url = topicId 
-                ? `http://localhost:8001/api/export/zotero/rss?topic_id=${topicId}`
-                : `http://localhost:8001/api/export/zotero/rss`
+              const url = absoluteApiUrl(topicId
+                ? `/api/export/zotero/rss?topic_id=${topicId}`
+                : `/api/export/zotero/rss`)
               navigator.clipboard.writeText(url)
               prompt("Zotero RSS URL copied to clipboard! Add this as a New Feed in Zotero:", url)
             }}

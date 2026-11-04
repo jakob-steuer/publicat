@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import type { Topic } from '../types'
 
 interface EditTopicModalProps {
@@ -9,18 +9,14 @@ interface EditTopicModalProps {
   isSaving: boolean;
 }
 
+/**
+ * The parent renders this with `key={topic.id}` so the draft fields are
+ * initialised from the topic on mount and reset whenever another topic is edited.
+ */
 export function EditTopicModal({ topic, isOpen, onClose, onSave, isSaving }: EditTopicModalProps) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [keywords, setKeywords] = useState('')
-
-  useEffect(() => {
-    if (topic && isOpen) {
-      setName(topic.name)
-      setDescription(topic.description)
-      setKeywords(topic.keywords || '')
-    }
-  }, [topic, isOpen])
+  const [name, setName] = useState(topic?.name ?? '')
+  const [description, setDescription] = useState(topic?.description ?? '')
+  const [keywords, setKeywords] = useState(topic?.keywords ?? '')
 
   if (!isOpen || !topic) return null
 

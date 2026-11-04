@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import React, { useState } from 'react'
 
-import type { Topic, Follow } from '../types'
+import type { Topic, Follow, Settings as AppSettings } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
 
 interface AuthorResult {
@@ -12,21 +12,21 @@ interface AuthorResult {
   isOrcid?: boolean;
   paperCount?: number;
   hIndex?: number;
-  affiliations?: any[];
+  affiliations?: string[];
 }
 
 const fetchTopics = async () => {
-  const { data } = await axios.get('http://localhost:8001/topics/')
+  const { data } = await axios.get('/topics/')
   return data
 }
 
 const fetchSettings = async () => {
-  const { data } = await axios.get('http://localhost:8001/settings/')
+  const { data } = await axios.get('/settings/')
   return data
 }
 
 const fetchFollows = async () => {
-  const { data } = await axios.get('http://localhost:8001/follows/')
+  const { data } = await axios.get('/follows/')
   return data
 }
 
@@ -60,8 +60,8 @@ export default function Settings() {
   const [authorBoost, setAuthorBoost] = useState('0.15')
 
   const { data: topics, isLoading: isLoadingTopics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
-  const { data: config } = useQuery({ 
-    queryKey: ['settings'], 
+  const { data: config } = useQuery<AppSettings>({
+    queryKey: ['settings'],
     queryFn: fetchSettings,
   })
 
@@ -73,17 +73,15 @@ export default function Settings() {
 
 
   // Update local state when config loads
+  // The server returns API keys masked (e.g. "sk-a••••x1z9"); a masked value
+  // sent back unchanged is ignored by the backend, so leaving a field alone is safe.
   React.useEffect(() => {
     if (config) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form draft mirrors server state once it loads
       setGeminiKey(config.gemini_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnthropicKey(config.anthropic_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setS2Key(config.s2_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBudget(config.anthropic_budget_limit?.toString() || '5.0')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRerankingMode(config.reranking_mode || 'llm')
     }
   }, [config])
@@ -110,7 +108,7 @@ export default function Settings() {
         }
         
         try {
-          const { data } = await axios.get(`http://localhost:8001/follows/search_author?query=${encodeURIComponent(authorQuery)}`)
+          const { data } = await axios.get(`/follows/search_author?query=${encodeURIComponent(authorQuery)}`)
           const results = data || []
           // Sort results by paperCount descending
           results.sort((a: AuthorResult, b: AuthorResult) => (b.paperCount || 0) - (a.paperCount || 0))
@@ -129,7 +127,7 @@ export default function Settings() {
 
   const createTopic = useMutation({
     mutationFn: async (newTopic: Partial<Topic>) => {
-      return axios.post('http://localhost:8001/topics/', newTopic)
+      return axios.post('/topics/', newTopic)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -142,7 +140,7 @@ export default function Settings() {
 
   const deleteTopic = useMutation({
     mutationFn: async (topicId: string) => {
-      return axios.delete(`http://localhost:8001/topics/${topicId}`)
+      return axios.delete(`/topics/${topicId}`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -151,7 +149,7 @@ export default function Settings() {
 
   const updateTopic = useMutation({
     mutationFn: async ({ id, name, description, keywords }: { id: string, name: string, description: string, keywords: string }) => {
-      return axios.put(`http://localhost:8001/topics/${id}`, { name, description, keywords: keywords || undefined })
+      return axios.put(`/topics/${id}`, { name, description, keywords: keywords || undefined })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -172,8 +170,8 @@ export default function Settings() {
   }
 
   const saveSettings = useMutation({
-    mutationFn: async (newSettings: { gemini_api_key?: string, anthropic_api_key?: string, s2_api_key?: string, anthropic_budget_limit?: number, enable_llm_reranking?: boolean }) => {
-      return axios.post('http://localhost:8001/settings/', newSettings)
+    mutationFn: async (newSettings: Partial<Omit<AppSettings, 'last_synced_at'>>) => {
+      return axios.post('/settings/', newSettings)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -183,7 +181,7 @@ export default function Settings() {
 
   const createFollow = useMutation({
     mutationFn: async (newFollow: Omit<Follow, 'id'>) => {
-      return axios.post('http://localhost:8001/follows/', newFollow)
+      return axios.post('/follows/', newFollow)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['follows'] })
@@ -192,7 +190,7 @@ export default function Settings() {
 
   const deleteFollow = useMutation({
     mutationFn: async (followId: string) => {
-      return axios.delete(`http://localhost:8001/follows/${followId}`)
+      return axios.delete(`/follows/${followId}`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['follows'] })
@@ -523,17 +521,17 @@ export default function Settings() {
       <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">
         <h2 className="text-xl font-semibold mb-2 text-red-700 dark:text-red-400">Data Management</h2>
         <p className="text-sm text-red-600/80 dark:text-red-400/80 mb-6">
-          Permanently delete all papers from your local database that are not explicitly starred. This action cannot be undone.
+          Permanently delete all papers from your local database that are neither starred nor voted on. Voted papers are kept because they train the ranking. This action cannot be undone.
         </p>
         
         <button 
           onClick={async () => {
-            if(window.confirm('Are you sure you want to delete all unstarred papers? This action cannot be undone.')) {
+            if(window.confirm('Delete all papers that are neither starred nor voted on? This action cannot be undone.')) {
               try {
-                const res = await axios.delete('http://localhost:8001/items/unstarred');
+                const res = await axios.delete('/items/unstarred');
                 alert(`Successfully deleted ${res.data.deleted} unstarred papers.`);
                 queryClient.invalidateQueries();
-              } catch (e) {
+              } catch {
                 alert('Failed to clear unstarred papers.');
               }
             }
@@ -544,6 +542,7 @@ export default function Settings() {
         </button>
       </div>
       <EditTopicModal 
+        key={editingTopic ? `${editingTopic.id}:${editingTopic.name}:${editingTopic.description}:${editingTopic.keywords ?? ''}` : 'none'}
         isOpen={isEditingModalOpen}
         onClose={() => setIsEditingModalOpen(false)}
         topic={editingTopic}

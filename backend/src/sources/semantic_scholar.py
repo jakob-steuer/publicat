@@ -89,7 +89,9 @@ async def enrich_papers_s2(identifiers: List[str]) -> List[Dict[str, Any]]:
         
     enriched = []
     
-    fields = "paperId,corpusId,title,abstract,authors,year,publicationDate,venue,externalIds,url,openAccessPdf,isOpenAccess,citationCount,referenceCount,influentialCitationCount,tldr,embedding.specter_v2,citationStyles"
+    # authors.externalIds carries each author's ORCID; without it ORCID-based
+    # follows can never match a paper.
+    fields = "paperId,corpusId,title,abstract,authors.authorId,authors.name,authors.externalIds,year,publicationDate,venue,externalIds,url,openAccessPdf,isOpenAccess,citationCount,referenceCount,influentialCitationCount,tldr,embedding.specter_v2,citationStyles"
     
     # S2 batch accepts max 1000, but we do chunks of 100 to be safe
     chunk_size = 100

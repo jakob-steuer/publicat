@@ -5,22 +5,31 @@ import { useParams, Link } from 'react-router-dom'
 import { ItemCard } from '../components/ItemCard'
 import { FilterBar } from '../components/FilterBar'
 import { Star, ThumbsUp, Minus, ThumbsDown, RefreshCw } from 'lucide-react'
-import type { Item, SyncProgress, Follow } from '../types'
+import type { Item, SyncProgress, Follow, Dashboard, Vote, VotePayload } from '../types'
+
+interface FeedProps {
+  showRated: boolean;
+  showPreprints: boolean;
+  searchQuery: string;
+  minScore: number;
+  isDark: boolean;
+  toggleTheme: () => void;
+}
 
 const fetchTopics = async () => {
-  const { data } = await axios.get('http://localhost:8001/topics/')
+  const { data } = await axios.get('/topics/')
   return data
 }
 
 const fetchDashboard = async (topicId?: string, authorId?: string, showRated: boolean = false, showPreprints: boolean = true, minScore: number = 0.20) => {
-  let url = `http://localhost:8001/dashboard/?show_acknowledged=${showRated}&show_preprints=${showPreprints}&show_discarded=${showRated}&min_score=${minScore}`
+  let url = `/dashboard/?show_acknowledged=${showRated}&show_preprints=${showPreprints}&show_discarded=${showRated}&min_score=${minScore}`
   if (topicId) url += `&topic_id=${topicId}`
   if (authorId) url += `&author_id=${encodeURIComponent(authorId)}`
   const { data } = await axios.get(url)
   return data
 }
 
-export default function Feed({ showRated, showPreprints, searchQuery, minScore, isDark, toggleTheme }: any) {
+export default function Feed({ showRated, showPreprints, searchQuery, minScore, isDark, toggleTheme }: FeedProps) {
   const queryClient = useQueryClient()
   const { topicId, authorId } = useParams()
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({})
@@ -31,7 +40,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
   const { data: follows } = useQuery({
     queryKey: ['follows'],
     queryFn: async () => {
-      const { data } = await axios.get('http://localhost:8001/follows/')
+      const { data } = await axios.get('/follows/')
       return data
     }
   })
@@ -39,17 +48,28 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
   const { data: syncProgress } = useQuery<SyncProgress>({
     queryKey: ['syncProgress'],
     queryFn: async () => {
-      const { data } = await axios.get('http://localhost:8001/items/progress')
+      const { data } = await axios.get('/items/progress')
       return data
     },
     refetchInterval: (query: { state: { data?: SyncProgress } }) => (query.state.data?.status === 'running' ? 1000 : false)
   })
 
 
-  const { data: dashboard, isLoading, refetch } = useQuery({ 
-    queryKey: ['dashboard', topicId, authorId, showRated, showPreprints, minScore], 
-    queryFn: () => fetchDashboard(topicId, authorId, showRated, showPreprints, minScore) 
+  const { data: dashboard, isLoading, refetch } = useQuery<Dashboard>({
+    queryKey: ['dashboard', topicId, authorId, showRated, showPreprints, minScore],
+    queryFn: () => fetchDashboard(topicId, authorId, showRated, showPreprints, minScore)
   })
+
+  // Every card knows the topic it was scored for; on a topic page that is the
+  // page's topic, on the overview it is the item's best-matching topic.
+  const topicForItem = (id: string): string | null => {
+    if (topicId) return topicId
+    for (const section of Object.values(dashboard ?? {})) {
+      const hit = (section as Item[] | undefined)?.find((i) => i.id === id)
+      if (hit) return hit.topic_id ?? null
+    }
+    return null
+  }
 
   // Invalidate queries when sync completes
   useEffect(() => {
@@ -61,56 +81,56 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
 
   const acknowledgeItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/acknowledge`)
+      return axios.put(`/items/${itemId}/acknowledge`)
     },
     onSuccess: () => refetch()
   })
 
   const unacknowledgeItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/unacknowledge`)
+      return axios.put(`/items/${itemId}/unacknowledge`)
     },
     onSuccess: () => refetch()
   })
 
   const starItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/star`)
+      return axios.put(`/items/${itemId}/star`)
     },
     onSuccess: () => refetch()
   })
 
   const unstarItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/unstar`)
+      return axios.put(`/items/${itemId}/unstar`)
     },
     onSuccess: () => refetch()
   })
 
   const hideItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/hide`)
+      return axios.put(`/items/${itemId}/hide`)
     },
     onSuccess: () => refetch()
   })
 
   const createFollow = useMutation({
     mutationFn: async (newFollow: Omit<Follow, 'id' | 'display_name'>) => {
-      return axios.post('http://localhost:8001/follows/', newFollow)
+      return axios.post('/follows/', newFollow)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const deleteFollow = useMutation({
     mutationFn: async (followId: string) => {
-      return axios.delete(`http://localhost:8001/follows/${followId}`)
+      return axios.delete(`/follows/${followId}`)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const voteItem = useMutation({
-    mutationFn: async ({ id, vote }: { id: string, vote: number | null }) => {
-      return axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: topicId || null, vote })
+    mutationFn: async ({ id, vote, topicId: itemTopic }: VotePayload) => {
+      return axios.post(`/items/${id}/vote`, { topic_id: topicId || itemTopic || topicForItem(id), vote })
     },
     onSuccess: () => refetch()
   })
@@ -119,7 +139,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
 
   const handleSyncControl = async (action: 'pause' | 'resume' | 'abort') => {
     try {
-      await axios.post('http://localhost:8001/items/sync/control', { action })
+      await axios.post('/items/sync/control', { action })
       queryClient.invalidateQueries({ queryKey: ['syncProgress'] })
     } catch (e) {
       console.error("Sync control failed", e)
@@ -132,7 +152,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
 
   const handleExportBibtex = async (itemIds: string[]) => {
     try {
-      const res = await axios.post('http://localhost:8001/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
+      const res = await axios.post('/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
       const url = window.URL.createObjectURL(new Blob([res.data]))
       const link = document.createElement('a')
       link.href = url
@@ -146,9 +166,9 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
     }
   }
 
-  const handleBulkVote = async (vote: number | null) => {
+  const handleBulkVote = async (vote: Vote) => {
     try {
-      await Promise.all(selectedItems.map(id => axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: topicId || null, vote })))
+      await Promise.all(selectedItems.map(id => axios.post(`/items/${id}/vote`, { topic_id: topicForItem(id), vote })))
       setSelectedItems([])
       refetch()
     } catch (e) {
@@ -158,7 +178,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
 
   const handleBulkRescore = async () => {
     try {
-      await axios.post('http://localhost:8001/items/bulk_rescore', { item_ids: selectedItems })
+      await axios.post('/items/bulk_rescore', { item_ids: selectedItems })
       setSelectedItems([])
       refetch()
       alert('Rescoring complete!')
@@ -183,6 +203,7 @@ export default function Feed({ showRated, showPreprints, searchQuery, minScore, 
       unacknowledgeItem={unacknowledgeItem}
       hideItem={hideItem}
       voteItem={voteItem}
+      showTopic={!topicId}
     />
   )
 

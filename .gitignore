@@ -41,3 +41,8 @@ Icon
 *.sqlite3
 *.db-shm
 *.db-wal
+
+# Local logs / scratch
+*.log
+frontend/lint_output.txt
+*.patch

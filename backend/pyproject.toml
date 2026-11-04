@@ -22,3 +22,8 @@ dependencies = [
     "uvicorn>=0.48.0",
     "xmltodict>=1.0.4",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

@@ -3,10 +3,11 @@ import axios from 'axios'
 import { useState } from 'react'
 import { ItemCard } from '../components/ItemCard'
 import { Star, ThumbsUp, Minus, ThumbsDown, RefreshCw } from 'lucide-react'
-import type { Item, Follow } from '../types'
+import type { Item, Follow, Vote, VotePayload } from '../types'
+import { absoluteApiUrl } from '../lib/api'
 
 const fetchStarred = async () => {
-  const { data } = await axios.get('http://localhost:8001/items/starred')
+  const { data } = await axios.get('/items/starred')
   return data
 }
 
@@ -22,7 +23,7 @@ export default function Starred() {
   const { data: follows } = useQuery({
     queryKey: ['follows'],
     queryFn: async () => {
-      const { data } = await axios.get('http://localhost:8001/follows/')
+      const { data } = await axios.get('/follows/')
       return data
     }
   })
@@ -33,7 +34,7 @@ export default function Starred() {
 
   const handleExportBibtex = async (itemIds: string[]) => {
     try {
-      const res = await axios.post('http://localhost:8001/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
+      const res = await axios.post('/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
       const url = window.URL.createObjectURL(new Blob([res.data]))
       const link = document.createElement('a')
       link.href = url
@@ -47,9 +48,11 @@ export default function Starred() {
     }
   }
 
-  const handleBulkVote = async (vote: number | null) => {
+  const topicForItem = (id: string): string | null => items?.find((i: Item) => i.id === id)?.topic_id ?? null
+
+  const handleBulkVote = async (vote: Vote) => {
     try {
-      await Promise.all(selectedItems.map(id => axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: null, vote })))
+      await Promise.all(selectedItems.map(id => axios.post(`/items/${id}/vote`, { topic_id: topicForItem(id), vote })))
       setSelectedItems([])
       refetch()
     } catch (e) {
@@ -59,7 +62,7 @@ export default function Starred() {
 
   const handleBulkRescore = async () => {
     try {
-      await axios.post('http://localhost:8001/items/bulk_rescore', { item_ids: selectedItems })
+      await axios.post('/items/bulk_rescore', { item_ids: selectedItems })
       setSelectedItems([])
       refetch()
       alert('Rescoring complete!')
@@ -71,49 +74,49 @@ export default function Starred() {
 
   const unstarItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/unstar`)
+      return axios.put(`/items/${itemId}/unstar`)
     },
     onSuccess: () => refetch()
   })
 
   const createFollow = useMutation({
     mutationFn: async (newFollow: Omit<Follow, 'id' | 'display_name'>) => {
-      return axios.post('http://localhost:8001/follows/', newFollow)
+      return axios.post('/follows/', newFollow)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const deleteFollow = useMutation({
     mutationFn: async (followId: string) => {
-      return axios.delete(`http://localhost:8001/follows/${followId}`)
+      return axios.delete(`/follows/${followId}`)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const starItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/star`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/star`),
     onSuccess: () => refetch()
   })
 
   const voteItem = useMutation({
-    mutationFn: async ({ id, vote }: { id: string, vote: number | null }) => {
-      return axios.post(`http://localhost:8001/items/${id}/vote`, { topic_id: null, vote })
+    mutationFn: async ({ id, vote, topicId }: VotePayload) => {
+      return axios.post(`/items/${id}/vote`, { topic_id: topicId ?? topicForItem(id), vote })
     },
     onSuccess: () => refetch()
   })
 
   const acknowledgeItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/acknowledge`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/acknowledge`),
     onSuccess: () => refetch()
   })
 
   const unacknowledgeItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/unacknowledge`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/unacknowledge`),
     onSuccess: () => refetch()
   })
 
   const hideItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/hide`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/hide`),
     onSuccess: () => refetch()
   })
 
@@ -123,8 +126,8 @@ export default function Starred() {
     return item.title?.toLowerCase().includes(q) || item.abstract?.toLowerCase().includes(q) || item.authors?.some(a => a.toLowerCase().includes(q))
   })
 
-  const renderItemCard = (item: Item & { score?: number }) => (
-    <ItemCard 
+  const renderItemCard = (item: Item) => (
+    <ItemCard
       key={item.id}
       item={item}
       selectedItems={selectedItems}
@@ -138,6 +141,7 @@ export default function Starred() {
       unacknowledgeItem={unacknowledgeItem}
       hideItem={hideItem}
       voteItem={voteItem}
+      showTopic
     />
   )
 
@@ -149,7 +153,7 @@ export default function Starred() {
             <h1 className="text-3xl font-bold tracking-tight">⭐ Starred Library</h1>
             <button 
               onClick={() => {
-                navigator.clipboard.writeText("http://localhost:8001/api/export/zotero/rss")
+                navigator.clipboard.writeText(absoluteApiUrl('/api/export/zotero/rss'))
                 alert("Zotero RSS URL copied to clipboard! Add this as a New Feed in Zotero.")
               }}
               className="text-xs bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 px-2 py-1 rounded-md flex items-center gap-1 font-semibold transition-colors mt-1"
@@ -162,7 +166,7 @@ export default function Starred() {
         </div>
         <div className="flex items-center gap-4">
           <a 
-            href="http://localhost:8001/api/export/bibtex/starred" 
+            href={absoluteApiUrl('/api/export/bibtex/starred')}
             target="_blank"
             className="text-sm bg-secondary text-secondary-foreground px-3 py-2 rounded-md hover:bg-secondary/80 flex gap-2 items-center whitespace-nowrap font-medium"
           >

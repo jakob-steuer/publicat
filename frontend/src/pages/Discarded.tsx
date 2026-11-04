@@ -3,9 +3,10 @@ import axios from 'axios'
 import { useState } from 'react'
 import { ItemCard } from '../components/ItemCard'
 import type { Item, Follow } from '../types'
+import { absoluteApiUrl } from '../lib/api'
 
 const fetchDiscarded = async () => {
-  const { data } = await axios.get('http://localhost:8001/items/discarded')
+  const { data } = await axios.get('/items/discarded')
   return data
 }
 
@@ -21,7 +22,7 @@ export default function Discarded() {
   const { data: follows } = useQuery({
     queryKey: ['follows'],
     queryFn: async () => {
-      const { data } = await axios.get('http://localhost:8001/follows/')
+      const { data } = await axios.get('/follows/')
       return data
     }
   })
@@ -32,7 +33,7 @@ export default function Discarded() {
 
   const handleExportBibtex = async (itemIds: string[]) => {
     try {
-      const res = await axios.post('http://localhost:8001/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
+      const res = await axios.post('/api/export/bibtex', { item_ids: itemIds }, { responseType: 'blob' })
       const url = window.URL.createObjectURL(new Blob([res.data]))
       const link = document.createElement('a')
       link.href = url
@@ -48,47 +49,47 @@ export default function Discarded() {
 
   const unstarItem = useMutation({
     mutationFn: async (itemId: string) => {
-      return axios.put(`http://localhost:8001/items/${itemId}/unstar`)
+      return axios.put(`/items/${itemId}/unstar`)
     },
     onSuccess: () => refetch()
   })
 
   const createFollow = useMutation({
     mutationFn: async (newFollow: Omit<Follow, 'id' | 'display_name'>) => {
-      return axios.post('http://localhost:8001/follows/', newFollow)
+      return axios.post('/follows/', newFollow)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const deleteFollow = useMutation({
     mutationFn: async (followId: string) => {
-      return axios.delete(`http://localhost:8001/follows/${followId}`)
+      return axios.delete(`/follows/${followId}`)
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['follows'] })
   })
 
   const starItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/star`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/star`),
     onSuccess: () => refetch()
   })
 
   const acknowledgeItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/acknowledge`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/acknowledge`),
     onSuccess: () => refetch()
   })
 
   const unacknowledgeItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/unacknowledge`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/unacknowledge`),
     onSuccess: () => refetch()
   })
 
   const hideItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/hide`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/hide`),
     onSuccess: () => refetch()
   })
 
   const unhideItem = useMutation({
-    mutationFn: async (itemId: string) => axios.put(`http://localhost:8001/items/${itemId}/unhide`),
+    mutationFn: async (itemId: string) => axios.put(`/items/${itemId}/unhide`),
     onSuccess: () => refetch()
   })
 
@@ -127,7 +128,7 @@ export default function Discarded() {
         </div>
         <div className="flex items-center gap-4">
           <a 
-            href="http://localhost:8001/api/export/bibtex/starred" 
+            href={absoluteApiUrl('/api/export/bibtex/starred')}
             target="_blank"
             className="text-sm bg-secondary text-secondary-foreground px-3 py-2 rounded-md hover:bg-secondary/80 flex gap-2 items-center whitespace-nowrap font-medium"
           >
