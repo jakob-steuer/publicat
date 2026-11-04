@@ -1,4 +1,5 @@
 import asyncio
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -10,12 +11,14 @@ from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from src.api.serialize import item_to_dict
+from src import jobs
 from src.database import get_db
 from src.llm.pipeline import run_summarization_pipeline
 from src.models.app_config import AppConfig
 from src.models.follow import Follow
 from src.models.item import Item
 from src.models.item_score import ItemScore
+from src.models.sync_run import SyncRun
 from src.models.topic import Topic
 from src.ranking.paper import Paper, load_follows
 from src.ranking.scoring import MIN_SCORE_TO_KEEP, score_paper
@@ -27,15 +30,13 @@ from src.sources.semantic_scholar import _published_after, discover_new_papers_s
 router = APIRouter(prefix="/items", tags=["items"])
 
 CLEANUP_AFTER = timedelta(weeks=8)
+MIN_LOOKBACK_DAYS = 3
+MAX_LOOKBACK_DAYS = 30
 DEFAULT_ARXIV_SETS = ["cs", "q-bio"]
 FEEDBACK_SEEDS = 100  # most recent positive/negative votes handed to the S2 recommender
 
-# Global state to track sync progress
-sync_state = {
-    "status": "idle",  # "idle", "running", "paused", "aborted", "error"
-    "message": "Ready",
-    "progress": 0,
-}
+# Progress state shared with the job runner (kept under the old name for callers).
+sync_state = jobs.state
 
 
 class SyncControlRequest(BaseModel):
@@ -44,16 +45,7 @@ class SyncControlRequest(BaseModel):
 
 @router.post("/sync/control")
 def control_sync(req: SyncControlRequest):
-    if req.action == "pause" and sync_state["status"] == "running":
-        sync_state["status"] = "paused"
-        sync_state["message"] = "Paused..."
-    elif req.action == "resume" and sync_state["status"] == "paused":
-        sync_state["status"] = "running"
-        sync_state["message"] = "Resuming..."
-    elif req.action == "abort" and sync_state["status"] in ["running", "paused"]:
-        sync_state["status"] = "aborted"
-        sync_state["message"] = "Aborted."
-    return sync_state
+    return jobs.control(req.action)
 
 
 async def _fetch_missing_abstract(doi: Optional[str], pmid: Optional[str]) -> Optional[str]:
@@ -126,15 +118,41 @@ def _topic_feedback(db: Session, topics: List[Topic]) -> dict:
     return feedback
 
 
+def local_embeddings_enabled() -> bool:
+    """Opt-in: loading PyTorch/SPECTER2 inside a sync stalls the API for seconds and
+    Semantic Scholar supplies a vector for nearly every paper anyway."""
+    return os.environ.get("PUBLICAT_LOCAL_EMBEDDINGS", "0") in ("1", "true", "True")
+
+
 def _local_embedding(title: str, abstract: str) -> Optional[list]:
-    """Local SPECTER2 only as a last resort; works without torch installed (returns None)."""
+    if not local_embeddings_enabled():
+        return None
     try:
         from src.embeddings import get_embedding
 
         return get_embedding(f"{title}. {abstract}")
     except Exception as e:
-        print(f"Local embedding unavailable: {e}")
+        print(f"Local embedding unavailable: {e}", flush=True)
         return None
+
+
+ABSTRACT_FETCH_CONCURRENCY = 6
+
+
+async def _fill_missing_abstracts(papers: list) -> None:
+    """Fetch missing abstracts from CrossRef / EuropePMC, a few at a time."""
+    todo = [p for p in papers if not p.get("abstract") and ((p.get("externalIds") or {}).get("DOI") or (p.get("externalIds") or {}).get("PubMed"))]
+    if not todo:
+        return
+    sem = asyncio.Semaphore(ABSTRACT_FETCH_CONCURRENCY)
+
+    async def one(p):
+        ext = p.get("externalIds") or {}
+        async with sem:
+            p["abstract"] = await _fetch_missing_abstract(ext.get("DOI"), ext.get("PubMed"))
+
+    await asyncio.gather(*(one(p) for p in todo))
+    print(f"  abstracts: {len(todo)} looked up, {sum(1 for p in todo if p.get('abstract'))} found", flush=True)
 
 
 async def run_ingestion(db: Session, days_back: int = 3):
@@ -180,10 +198,16 @@ async def run_ingestion(db: Session, days_back: int = 3):
         return
 
     # Skip everything already in the database before paying for enrichment.
-    existing = {i[0] for i in db.query(Item.source_native_id).all()}
-    existing |= {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
-    existing |= {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
+    def known_identifiers() -> set:
+        known = {i[0] for i in db.query(Item.source_native_id).all()}
+        known |= {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
+        known |= {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
+        return known
+
+    existing = await asyncio.to_thread(known_identifiers)
     identifiers_list = [i for i in all_identifiers if i not in existing]
+    jobs.count("discovered", len(all_identifiers))
+    jobs.count("new_candidates", len(identifiers_list))
     print(f"  discovery: {len(all_identifiers)} candidates, {len(identifiers_list)} not yet in the database", flush=True)
     if not identifiers_list:
         sync_state["message"] = "No new papers discovered."
@@ -194,21 +218,33 @@ async def run_ingestion(db: Session, days_back: int = 3):
     sync_state["progress"] = 40
     enriched_all = await enrich_papers_s2(identifiers_list)
     enriched_papers = [p for p in enriched_all if _published_after(p, since - timedelta(days=7))]
+    jobs.count("enriched", len(enriched_papers))
     print(f"  enrichment: {len(enriched_all)} records from S2, {len(enriched_papers)} within the date window", flush=True)
 
-    # 3. SCORING -------------------------------------------------------------
+    # 3. SCORING (CPU + DB work, in a worker thread so the API stays responsive) ----
+    sync_state["message"] = "Fetching missing abstracts..."
+    sync_state["progress"] = 55
+    await _fill_missing_abstracts(enriched_papers)
+    if sync_state["status"] == "aborted":
+        return
     sync_state["message"] = "Scoring papers..."
     sync_state["progress"] = 60
+    stored = await asyncio.to_thread(score_and_store, db, enriched_papers, active_topics)
+    jobs.count("stored", stored)
+
+
+def score_and_store(db: Session, enriched_papers: list, active_topics: list) -> int:
+    """Deduplicate, score against every topic and store the keepers. Synchronous; run in a thread."""
     follow_ctx = load_follows(db)
     models = load_models(db, active_topics)
-
     total = len(enriched_papers)
     stored = 0
+    no_embedding = 0
     for idx, paper in enumerate(enriched_papers):
-        sync_state["message"] = f"Scoring papers ({idx + 1}/{total})..."
-        sync_state["progress"] = 60 + int((idx / max(1, total)) * 20)
-        if sync_state["status"] == "aborted":
-            return
+        if idx % 25 == 0:
+            jobs.set_progress(60 + int((idx / max(1, total)) * 20), f"Scoring papers ({idx + 1}/{total})...")
+        if jobs.aborted():
+            break
 
         corpus_id = str(paper.get("corpusId")) if paper.get("corpusId") is not None else None
         external_ids = paper.get("externalIds") or {}
@@ -228,7 +264,7 @@ async def run_ingestion(db: Session, days_back: int = 3):
             continue
 
         title = paper.get("title") or "Unknown Title"
-        abstract = paper.get("abstract") or await _fetch_missing_abstract(doi, pmid) or "No abstract available."
+        abstract = paper.get("abstract") or "No abstract available."
         paper["abstract"] = abstract
         if not paper.get("venue"):
             paper["venue"] = preprint_venue(external_ids)
@@ -236,8 +272,8 @@ async def run_ingestion(db: Session, days_back: int = 3):
         features = Paper.from_s2(paper)
         if features.embedding is None:
             features.embedding = _local_embedding(title, abstract)
-        await asyncio.sleep(0)  # yield to the event loop between papers
         if features.embedding is None:
+            no_embedding += 1
             continue
 
         topic_scores = score_paper(features, active_topics, models, follow_ctx)
@@ -274,9 +310,12 @@ async def run_ingestion(db: Session, days_back: int = 3):
         for ts in topic_scores:
             db.add(ItemScore(item_id=db_item.id, topic_id=ts.topic_id, semantic_score=ts.semantic_score, final_score=ts.final_score, reasons=ts.reasons))
         stored += 1
+        if stored % 200 == 0:
+            db.commit()
 
     db.commit()
-    print(f"  scoring: {total} candidates scored, {stored} stored (>= {MIN_SCORE_TO_KEEP:.2f} relevance or keyword/author/journal signal)", flush=True)
+    print(f"  scoring: {total} candidates scored, {stored} stored (>= {MIN_SCORE_TO_KEEP:.2f} relevance or keyword/author/journal signal), {no_embedding} skipped without embedding", flush=True)
+    return stored
 
 
 def cleanup_old_items(db: Session) -> int:
@@ -304,60 +343,120 @@ def cleanup_old_items(db: Session) -> int:
     return deleted
 
 
-def _finish_sync(db: Session) -> None:
-    sync_state["status"] = "idle"
-    sync_state["message"] = "Sync Complete!"
-    sync_state["progress"] = 100
-    now_iso = datetime.now(timezone.utc).isoformat()
-    entry = db.query(AppConfig).filter(AppConfig.key == "last_synced_at").first()
+def _set_config(db: Session, key: str, value: str) -> None:
+    entry = db.query(AppConfig).filter(AppConfig.key == key).first()
     if entry:
-        entry.value = now_iso
+        entry.value = value
     else:
-        db.add(AppConfig(key="last_synced_at", value=now_iso))
+        db.add(AppConfig(key=key, value=value))
+
+
+def _get_config(db: Session, key: str) -> Optional[str]:
+    entry = db.query(AppConfig).filter(AppConfig.key == key).first()
+    return entry.value if entry else None
+
+
+def lookback_days(db: Session, now: Optional[datetime] = None) -> int:
+    """How far back to fetch: since the last *complete* sync, at least 3 and at most 30 days.
+
+    A laptop that was off for a week therefore catches up on the week, and a run
+    that lost requests does not advance the mark, so the next run re-covers it.
+    """
+    now = now or datetime.now(timezone.utc)
+    last = _get_config(db, "last_complete_sync_at")
+    if not last:
+        return MIN_LOOKBACK_DAYS
+    try:
+        last_dt = datetime.fromisoformat(last)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return MIN_LOOKBACK_DAYS
+    gap_days = (now - last_dt).total_seconds() / 86400.0
+    return int(max(MIN_LOOKBACK_DAYS, min(MAX_LOOKBACK_DAYS, gap_days + 1)))
+
+
+def _finish_sync(db: Session, complete: bool) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _set_config(db, "last_synced_at", now_iso)
+    if complete:
+        _set_config(db, "last_complete_sync_at", now_iso)
     db.commit()
 
 
-def _aborted() -> bool:
-    if sync_state["status"] == "aborted":
-        sync_state["status"] = "idle"
-        sync_state["progress"] = 0
-        sync_state["message"] = "Sync Aborted"
-        return True
-    return False
-
-
-async def full_sync(db: Session, days_back: int = 3) -> None:
-    """Ingest, clean up, summarize. Shared by the manual trigger and the scheduler."""
+async def _sync_steps(db: Session, days_back: Optional[int], name: str) -> None:
+    days = days_back or lookback_days(db)
+    run = SyncRun(job=name, days_back=days, status="running")
+    db.add(run)
+    db.commit()
     try:
-        await run_ingestion(db, days_back=days_back)
-        if _aborted():
-            return
-        sync_state["message"] = "Cleaning up old DB items..."
-        sync_state["progress"] = 80
-        print(f"Cleaned up {cleanup_old_items(db)} old unstarred, unvoted items.")
-        sync_state["message"] = "Running LLM summaries (this may take a while)..."
-        sync_state["progress"] = 90
-        await run_summarization_pipeline(db)
-        if _aborted():
-            return
-        _finish_sync(db)
+        await run_ingestion(db, days_back=days)
+        if not jobs.aborted():
+            jobs.set_progress(80, "Cleaning up old DB items...")
+            deleted = await asyncio.to_thread(cleanup_old_items, db)
+            jobs.count("cleaned_up", deleted)
+            print(f"Cleaned up {deleted} old unstarred, unvoted items.", flush=True)
+            jobs.set_progress(90, "Running LLM summaries (this may take a while)...")
+            await run_summarization_pipeline(db)
     except Exception as e:
-        sync_state["status"] = "error"
-        sync_state["message"] = f"Error during sync: {e}"
+        run.status, run.message = "error", repr(e)[:500]
+        raise
+    finally:
+        errors = int(jobs.state.get("errors", 0))
+        if run.status == "running":
+            run.status = "aborted" if jobs.aborted() else ("partial" if errors else "complete")
+        run.errors = errors
+        run.counters = dict(jobs.state.get("counters", {}))
+        run.finished_at = datetime.now(timezone.utc)
+        if run.status == "partial":
+            run.message = f"{errors} request(s) failed; the period will be fetched again next time."
+        if run.status in ("complete", "partial"):
+            _finish_sync(db, complete=run.status == "complete")
+        db.commit()
+
+
+async def full_sync(db: Session, days_back: Optional[int] = None, name: str = "sync") -> bool:
+    """Ingest, clean up, summarize, as the single exclusive background job.
+
+    days_back=None derives the window from the last complete sync. Returns False
+    if another job was already running (nothing was done).
+    """
+    result = await jobs.run_exclusive(name, lambda: _sync_steps(db, days_back, name))
+    return result is not None or not jobs.is_busy()
+
+
+@router.get("/sync_runs", response_model=List[dict])
+def sync_runs(limit: int = 10, db: Session = Depends(get_db)):
+    """Most recent sync jobs with their outcome and counts (Settings page)."""
+    rows = db.query(SyncRun).order_by(desc(SyncRun.started_at)).limit(max(1, min(limit, 50))).all()
+    return [
+        {
+            "id": r.id,
+            "job": r.job,
+            "status": r.status,
+            "days_back": r.days_back,
+            "started_at": r.started_at,
+            "finished_at": r.finished_at,
+            "errors": r.errors,
+            "counters": r.counters or {},
+            "message": r.message,
+        }
+        for r in rows
+    ]
 
 
 @router.post("/fetch", response_model=dict)
 async def trigger_fetch(background_tasks: BackgroundTasks):
     """Manually trigger ingestion from all sources in the background."""
-    if sync_state["status"] in ("running", "paused"):
-        return {"status": "error", "message": "Sync is already running"}
+    if jobs.is_busy():
+        return {"status": "error", "message": f"{jobs.state.get('job') or 'A job'} is already running"}
 
     async def task():
         from src.database import SessionLocal
 
         db = SessionLocal()
         try:
-            await full_sync(db)
+            await full_sync(db, name="manual fetch")
         finally:
             db.close()
 

@@ -3,6 +3,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import List
 
+from src import jobs
+
 ARXIV_OAI_URL = "https://oaipmh.arxiv.org/oai"
 
 async def harvest_arxiv_oai(sets: List[str], since: datetime) -> List[str]:
@@ -45,7 +47,7 @@ async def harvest_arxiv_oai(sets: List[str], since: datetime) -> List[str]:
                                     clean_id = raw_id.replace("oai:arXiv.org:", "ARXIV:")
                                     discovered_ids.append(clean_id)
             except Exception as e:
-                print(f"Failed to harvest arXiv set {s}: {e}")
+                jobs.note_error(f"arXiv harvest failed for set {s}: {e}")
                 
     return discovered_ids
 
@@ -73,6 +75,6 @@ async def harvest_biorxiv_api(since: datetime) -> List[str]:
                         if doi:
                             discovered_ids.append(doi)
         except Exception as e:
-            print(f"Failed to harvest bioRxiv: {e}")
+            jobs.note_error(f"bioRxiv harvest failed: {e}")
             
     return discovered_ids

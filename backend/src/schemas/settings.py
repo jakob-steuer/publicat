@@ -18,4 +18,6 @@ class SettingsResponse(BaseModel):
     enable_llm_reranking: bool
     reranking_mode: str
     zotero_auto_push: bool = False
+    llm_spend_this_month: float = 0.0
     last_synced_at: Optional[str] = None
+    last_complete_sync_at: Optional[str] = None

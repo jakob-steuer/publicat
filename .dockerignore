@@ -1,0 +1,12 @@
+.git
+backups
+**/node_modules
+frontend/dist
+backend/.venv
+backend/__pycache__
+**/__pycache__
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.env
+**/*.log

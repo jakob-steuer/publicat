@@ -114,7 +114,21 @@ export interface Settings {
   enable_llm_reranking: boolean;
   reranking_mode: string;
   zotero_auto_push: boolean;
+  llm_spend_this_month?: number;
   last_synced_at?: string;
+  last_complete_sync_at?: string | null;
+}
+
+export interface SyncRun {
+  id: string;
+  job: string;
+  status: 'running' | 'complete' | 'partial' | 'aborted' | 'error';
+  days_back?: number | null;
+  started_at: string;
+  finished_at?: string | null;
+  errors: number;
+  counters: Record<string, number>;
+  message?: string | null;
 }
 
 export type InboxFilter = 'all' | 'top' | 'week' | 'month' | 'authors' | 'starred'

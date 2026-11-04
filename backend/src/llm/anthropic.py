@@ -8,9 +8,16 @@ def _text(response) -> str:
 
 
 class AnthropicProvider(LLMProvider):
+    name = "anthropic"
+
     def __init__(self, api_key: str, model: str = "claude-haiku-5-5"):
+        super().__init__()
         self.client = AsyncAnthropic(api_key=api_key)
         self.model = model
+
+    def _track(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        self.add_usage(getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0))
 
     async def summarize_brief(self, text: str, topic_desc: str) -> tuple[str, int]:
         prompt = f"""You are a scientific newsletter editor summarizing a paper for a researcher interested in: '{topic_desc}'.
@@ -35,6 +42,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
             )
+            self._track(response)
             data = json.loads(_text(response))
             return data.get("summary", ""), data.get("score", 5)
         except Exception as e:
@@ -66,6 +74,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}]
             )
+            self._track(response)
             
             # Anthropic doesn't have a strict JSON mode parameter natively exposed like Gemini, but it follows instructions well.
             content = _text(response)
@@ -100,6 +109,7 @@ Respond ONLY with a valid JSON object matching this schema:
                     {"role": "user", "content": prompt}
                 ]
             )
+            self._track(response)
             content = _text(response)
             
             if "```json" in content:
@@ -136,6 +146,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=150,
                 messages=[{"role": "user", "content": prompt}]
             )
+            self._track(response)
             content = _text(response)
             if "{" in content and "}" in content:
                 start = content.find("{")
@@ -155,6 +166,7 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}]
             )
+            self._track(response)
             return _text(response)
         except Exception as e:
             print(f"Anthropic generate error: {e}")

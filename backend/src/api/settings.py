@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from src.database import get_db
+from src.llm.budget import month_spend
 from src.models.app_config import AppConfig
 from src.schemas.settings import SettingsUpdate, SettingsResponse
 
@@ -39,7 +40,9 @@ def get_settings(db: Session = Depends(get_db)):
         "enable_llm_reranking": get_config_value(db, "enable_llm_reranking", "true") == "true",
         "reranking_mode": get_config_value(db, "reranking_mode", "llm"),
         "zotero_auto_push": get_config_value(db, "zotero_auto_push", "false") == "true",
+        "llm_spend_this_month": month_spend(db),
         "last_synced_at": get_config_value(db, "last_synced_at", None),
+        "last_complete_sync_at": get_config_value(db, "last_complete_sync_at", None),
     }
 
 

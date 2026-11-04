@@ -23,7 +23,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
 
 def upgrade(engine: Engine) -> list[str]:
     """Create missing tables and columns. Returns a list of applied changes."""
-    from src.models import app_config, follow, item, item_score, rss, topic, topic_model  # noqa: F401
+    from src.models import app_config, follow, item, item_score, rss, sync_run, topic, topic_model  # noqa: F401
     from src.models.base import Base
 
     applied: list[str] = []

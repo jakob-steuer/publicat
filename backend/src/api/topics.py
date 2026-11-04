@@ -25,13 +25,19 @@ def _topic_text(name: str, description: str, keywords: Optional[str]) -> str:
 
 
 def _local_embedding(text: str) -> Optional[list]:
-    """Legacy local SPECTER2 vector; optional (returns None without torch / model)."""
+    """Legacy local SPECTER2 topic vector. Opt-in (PUBLICAT_LOCAL_EMBEDDINGS=1): the
+    Semantic Scholar-space prior vector replaced it, and loading PyTorch inside a
+    request stalls the API for seconds."""
+    from src.api.items import local_embeddings_enabled
+
+    if not local_embeddings_enabled():
+        return None
     try:
         from src.embeddings import get_embedding
 
         return get_embedding(text)
     except Exception as e:
-        print(f"Local topic embedding skipped: {e}")
+        print(f"Local topic embedding skipped: {e}", flush=True)
         return None
 
 
@@ -69,7 +75,8 @@ async def prepare_topic(topic_id: str, rescore_all: bool, then_sync_days: Option
         if then_sync_days:
             from src.api.items import full_sync
 
-            await full_sync(db, days_back=then_sync_days)
+            if not await full_sync(db, days_back=then_sync_days, name=f"initial fetch for '{topic.name}'"):
+                print(f"Initial fetch for '{topic.name}' skipped: another job is running (the next sync will pick it up).", flush=True)
     except Exception as e:
         print(f"prepare_topic failed for {topic_id}: {e!r}", flush=True)
     finally:

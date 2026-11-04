@@ -4,6 +4,7 @@ from typing import Any, Dict, List
 
 import httpx
 
+from src import jobs
 from src.config import settings
 from src.database import SessionLocal
 from src.models.app_config import AppConfig
@@ -54,10 +55,13 @@ async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str 
                     continue
                 response.raise_for_status()
                 await asyncio.sleep(1.0)  # rate-limit respect
-                return response.json()
+                # Batch responses carry 100 papers x 768-float embeddings (several MB of
+                # JSON); parse off the event loop so the UI does not stall.
+                return await asyncio.to_thread(response.json) if len(response.content) > 200_000 else response.json()
             except Exception as e:
                 print(f"S2 API Error on {url}: {e}")
                 await asyncio.sleep(2**attempt)
+    jobs.note_error(f"Semantic Scholar request failed after {retries} attempts: {url.split('/v1/')[-1][:60]}")
     return None
 
 

@@ -27,10 +27,11 @@ scheduler = AsyncIOScheduler()
 
 
 async def scheduled_fetch():
-    print("Running scheduled fetch...")
+    print("Running scheduled fetch...", flush=True)
     db = SessionLocal()
     try:
-        await items.full_sync(db)
+        if not await items.full_sync(db, name="scheduled fetch"):
+            print("Scheduled fetch skipped: another job is running.", flush=True)
     finally:
         db.close()
 

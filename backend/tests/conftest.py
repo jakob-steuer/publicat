@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool  # noqa: E402
 
 from src import database  # noqa: E402
 from src.models.base import Base  # noqa: E402
-from src.models import item, item_score, topic, follow, app_config, rss  # noqa: E402,F401
+from src.models import item, item_score, topic, follow, app_config, rss, sync_run, topic_model  # noqa: E402,F401
 
 
 @pytest.fixture()

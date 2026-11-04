@@ -5,6 +5,8 @@ from datetime import datetime
 
 import httpx
 
+from src import jobs
+
 ORCID_WORKS_URL = "https://pub.orcid.org/v3.0/{orcid}/works"
 
 
@@ -36,7 +38,7 @@ async def orcid_recent_dois(orcid: str, since: datetime) -> list[str]:
                 return []
             data = resp.json()
     except Exception as e:
-        print(f"ORCID fetch failed for {orcid}: {e}")
+        jobs.note_error(f"ORCID fetch failed for {orcid}: {e}")
         return []
 
     since_naive = since.replace(tzinfo=None)

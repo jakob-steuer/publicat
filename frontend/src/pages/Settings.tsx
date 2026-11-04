@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import React, { useState } from 'react'
 
-import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats } from '../types'
+import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats, SyncRun } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
 import { TopicForm } from '../components/TopicForm'
 import { emptyDraft, payloadFromDraft } from '../lib/topicDraft'
@@ -41,6 +41,7 @@ export default function Settings() {
   const { data: zotero } = useQuery({ queryKey: ['zoteroStatus'], queryFn: api.zoteroStatus, refetchInterval: 20000, retry: false })
   const [zoteroAuto, setZoteroAuto] = useState(false)
   const { data: leaks } = useQuery({ queryKey: ['voteLeaks'], queryFn: api.voteLeaks })
+  const { data: syncRuns } = useQuery<SyncRun[]>({ queryKey: ['syncRuns'], queryFn: () => api.syncRuns(8), refetchInterval: 30000 })
   const repairVotes = useMutation({
     mutationFn: api.repairVotes,
     onSuccess: r => {
@@ -489,7 +490,7 @@ export default function Settings() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Monthly Budget Cap (USD)</label>
+            <label className="block text-sm font-medium mb-1">Monthly cloud LLM budget (USD) <span className="text-muted-foreground font-normal">· spent this month: ${(config?.llm_spend_this_month ?? 0).toFixed(3)}</span></label>
             <input 
               type="number" 
               step="0.5"
@@ -547,6 +548,35 @@ export default function Settings() {
         </form>
       </div>
 
+
+      <div className="border rounded-lg p-6 bg-card shadow-sm">
+        <h2 className="text-xl font-semibold mb-2">Recent syncs</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Each fetch looks back to the last <em>complete</em> sync (at least 3, at most 30 days). A run with failed requests is marked partial and its period is fetched again next time, so a lost connection or a closed laptop never leaves a gap.
+          {config?.last_complete_sync_at && <> Last complete sync: {new Date(config.last_complete_sync_at).toLocaleString()}.</>}
+        </p>
+        {!syncRuns?.length ? (
+          <p className="text-sm text-muted-foreground italic">No syncs recorded yet.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted-foreground text-left">
+              <tr><th className="py-1 pr-3 font-medium">When</th><th className="py-1 pr-3 font-medium">Job</th><th className="py-1 pr-3 font-medium">Result</th><th className="py-1 pr-3 font-medium text-right">Window</th><th className="py-1 pr-3 font-medium text-right">New</th><th className="py-1 font-medium text-right">Errors</th></tr>
+            </thead>
+            <tbody>
+              {syncRuns.map(r => (
+                <tr key={r.id} className="border-t border-border/60" title={r.message ?? ''}>
+                  <td className="py-1.5 pr-3 whitespace-nowrap">{new Date(r.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                  <td className="py-1.5 pr-3 truncate max-w-[16ch]">{r.job}</td>
+                  <td className={`py-1.5 pr-3 font-medium ${r.status === 'complete' ? 'text-emerald-600' : r.status === 'running' ? 'text-primary' : r.status === 'partial' ? 'text-amber-600' : 'text-red-600'}`}>{r.status}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.days_back ?? '–'} d</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.counters?.stored ?? '–'}</td>
+                  <td className="py-1.5 text-right tabular-nums">{r.errors}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       <div className="border rounded-lg p-6 bg-card shadow-sm">
         <h2 className="text-xl font-semibold mb-2">Zotero</h2>

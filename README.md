@@ -60,6 +60,12 @@ If you want to pull updates via Git or modify the code, you will need **Node.js 
 1. `git clone git@github.com:jakob-steuer/publicat.git`
 2. Double-click the `start.bat` file.
 
+### Docker
+```bash
+docker compose up --build
+```
+One image serves the API and the UI on `http://localhost:8001`; your data lives in the `publicat-data` volume. The image does not include PyTorch (Semantic Scholar supplies the embeddings), so it is small and starts fast.
+
 ### Manual Installation
 Make sure you have Node.js (v18+) and Python (3.11+) with `uv` installed.
 To install `uv` on Mac/Linux, you can run:
@@ -75,13 +81,11 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 2. **Start the Backend:**
    ```bash
-   cp backend/.env.example backend/.env
-   # Tip: Add your S2_API_KEY to the .env file for faster fetching!
-   
    cd backend
-   uv sync
+   uv sync                 # add --extra local for optional on-device embeddings (PyTorch, ~2 GB; then set PUBLICAT_LOCAL_EMBEDDINGS=1)
    uv run uvicorn src.main:app --reload --port 8001
    ```
+   Run the tests with `uv run pytest` (backend) and `npm run build` (frontend), or `make test` for both.
 
 3. **Start the Frontend:** (In a new terminal window)
    ```bash
@@ -122,6 +126,7 @@ The inbox is one ranked list per scope (all topics, one topic, or one author), w
 - 👎 **Downvote / Discard (-1):** Not relevant. Hides the paper entirely and penalizes similar papers in the future.
 
 ### Features at a Glance
+- **Interruption-safe syncing:** every fetch looks back to the last *complete* sync (at least 3, at most 30 days), so a laptop that was closed for a week catches up. Writes are transactional; a run that lost requests is marked *partial* in Settings → Recent syncs and its period is fetched again next time. Only one sync runs at a time.
 - **Automatic Cleanup:** To prevent database bloat, any publication older than 60 days that you haven't explicitly starred is automatically removed. Starred papers are kept forever!
 - **Follow Authors:** Click the `+` icon next to an author's name on any paper. Every future paper they publish will automatically receive a score boost (+15%) and be highlighted in your feed!
 - **High-Impact Journals:** Papers published in major life science and medical journals (like Nature, Science, Cell, NEJM) automatically receive a semantic score boost to ensure they surface in your feed.

@@ -51,15 +51,23 @@ def migrate_legacy_database(target: Path | None = None, legacy: Path | None = No
     if target.exists() or not legacy.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
+    # Write to a temporary name and rename at the end: an interrupted copy must
+    # never leave a truncated file where the next start would pick it up.
+    tmp = target.with_name(target.name + ".partial")
+    for leftover in (tmp, Path(str(tmp) + "-journal")):
+        if leftover.exists():
+            leftover.unlink()
     src = sqlite3.connect(f"file:{legacy}?mode=ro", uri=True)
     try:
-        dst = sqlite3.connect(target)
+        dst = sqlite3.connect(tmp)
         try:
             src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
         finally:
             dst.close()
     finally:
         src.close()
+    os.replace(tmp, target)
     print(f"Copied existing database to {target} (the old file at {legacy} was left untouched).", flush=True)
     return True
 
