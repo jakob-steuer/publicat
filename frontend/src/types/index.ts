@@ -113,7 +113,38 @@ export interface Settings {
   anthropic_budget_limit: number;
   enable_llm_reranking: boolean;
   reranking_mode: string;
+  zotero_auto_push: boolean;
   last_synced_at?: string;
+}
+
+export type InboxFilter = 'all' | 'top' | 'week' | 'month' | 'authors' | 'starred'
+export type InboxSort = 'score' | 'date'
+
+export interface InboxParams {
+  topic_id?: string;
+  author_id?: string;
+  min_score?: number;
+  days?: number;
+  show_acknowledged?: boolean;
+  show_preprints?: boolean;
+  show_discarded?: boolean;
+  q?: string;
+  filter?: InboxFilter;
+  sort?: InboxSort;
+  limit?: number;
+  offset?: number;
+}
+
+export interface InboxPage {
+  items: Item[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface InboxCounts {
+  all: number;
+  topics: Record<string, number>;
 }
 
 export interface Dashboard {

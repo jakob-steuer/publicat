@@ -114,7 +114,7 @@ If you're unsure how to describe your topic, ask an LLM of your choice:
 
 ## Using the Interface
 
-Publicat utilizes an efficient, swipe-style review system to help you quickly triage your daily feed and maintain **Inbox Zero**. Your goal is to clear out your unread feed every day:
+The inbox is one ranked list per scope (all topics, one topic, or one author), with a reading pane. It is built for keyboard triage: `j`/`k` move, `Enter` opens the pane, `s` `u` `n` `d` vote, `z` undoes, `o` opens the article, `x` selects for bulk actions, `/` searches, `?` shows all shortcuts. After a vote the focus moves on, so a daily pass is a few keystrokes per paper. Filter chips narrow the list to Do-not-miss (score ≥ 90), this week, this month or followed authors; the sidebar shows unread counts per topic and holds the minimum-relevance slider. Your goal is to clear the inbox every day:
 
 - ⭐ **Star (+2):** Save this paper. It will be permanently kept in your "Starred" feed for future reference, exported to your Zotero RSS feed, and heavily boosts similar papers in your future feed.
 - 👍 **Upvote (+1):** Relevant paper, but you don't need to save it permanently. Boosts similar papers.
@@ -128,7 +128,9 @@ Publicat utilizes an efficient, swipe-style review system to help you quickly tr
 - **Export Citations:** Easily export your starred papers to share or use in manuscripts.
 
 ### Zotero Integration
-Every topic in Publicat features a dedicated "Zotero RSS URL" button at the top of the dashboard.
+**One click, no API key:** with the Zotero desktop app running, the "Zotero" button in the reading pane (or in the bulk bar for a selection) saves the paper straight into the collection currently selected in Zotero, including the open-access PDF link and the AI summary as a note. Settings can turn on automatic saving of every starred paper.
+
+**RSS fallback:** every topic also has a "Zotero RSS URL" button at the top of the inbox.
 
 **How it works:**
 1. Click the button to copy your unique topic URL.

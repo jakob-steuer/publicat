@@ -6,6 +6,8 @@ import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStat
 import { EditTopicModal } from '../components/EditTopicModal'
 import { TopicForm } from '../components/TopicForm'
 import { emptyDraft, payloadFromDraft } from '../lib/topicDraft'
+import { useToast } from '../hooks/useToast'
+import { api } from '../lib/client'
 
 interface AuthorResult {
   authorId: string | null;
@@ -35,6 +37,19 @@ const fetchFollows = async () => {
 
 export default function Settings() {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const { data: zotero } = useQuery({ queryKey: ['zoteroStatus'], queryFn: api.zoteroStatus, refetchInterval: 20000, retry: false })
+  const [zoteroAuto, setZoteroAuto] = useState(false)
+  const { data: leaks } = useQuery({ queryKey: ['voteLeaks'], queryFn: api.voteLeaks })
+  const repairVotes = useMutation({
+    mutationFn: api.repairVotes,
+    onSuccess: r => {
+      toast(`Fixed ${r.items} papers: ${r.cleared_rows} copied votes removed, ${r.retraining_topics} topics retraining`, { kind: 'success', duration: 6000 })
+      queryClient.invalidateQueries({ queryKey: ['voteLeaks'] })
+      queryClient.invalidateQueries({ queryKey: ['topicModels'] })
+    },
+    onError: () => toast('Repair failed', { kind: 'error' }),
+  })
   
   // Topic state
   const [draft, setDraft] = useState<TopicDraft>(emptyDraft)
@@ -92,6 +107,7 @@ export default function Settings() {
       setS2Key(config.s2_api_key || '')
       setBudget(config.anthropic_budget_limit?.toString() || '5.0')
       setRerankingMode(config.reranking_mode || 'llm')
+      setZoteroAuto(!!config.zotero_auto_push)
     }
   }, [config])
 
@@ -169,7 +185,7 @@ export default function Settings() {
     onError: (err) => {
       console.error(err)
       setIsUpdatingTopic(false)
-      alert("Failed to update topic. Did you forget to restart the backend terminal? (start.bat / start.sh)")
+      toast('Failed to update topic. Is the backend running?', { kind: 'error' })
     }
   })
 
@@ -185,7 +201,9 @@ export default function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       setIsSavingConfig(false)
-    }
+      toast('Settings saved', { kind: 'success' })
+    },
+    onError: () => { setIsSavingConfig(false); toast('Saving settings failed', { kind: 'error' }) },
   })
 
   const createFollow = useMutation({
@@ -231,7 +249,8 @@ export default function Settings() {
       anthropic_api_key: anthropicKey,
       s2_api_key: s2Key,
       anthropic_budget_limit: parseFloat(budget),
-      reranking_mode: rerankingMode
+      reranking_mode: rerankingMode,
+      zotero_auto_push: zoteroAuto,
     })
   }
 
@@ -285,6 +304,16 @@ export default function Settings() {
               </div>
             ))}
             {topics?.length === 0 && <p className="text-muted-foreground text-sm">No topics added yet.</p>}
+          </div>
+        )}
+
+        {leaks && leaks.items > 0 && (
+          <div className="mb-6 border border-amber-300/60 bg-amber-50/60 dark:bg-amber-950/20 rounded-lg p-4 text-sm">
+            <p className="font-semibold mb-1">Votes copied across topics: {leaks.items} papers ({leaks.rows} rows)</p>
+            <p className="text-muted-foreground mb-3">Older versions wrote a vote made on the overview page to every topic the paper matched, so topics learned from each other's feedback. The repair keeps each of these votes only on the topic the paper fits best and retrains.</p>
+            <button onClick={() => repairVotes.mutate()} disabled={repairVotes.isPending} className="px-3 py-1.5 rounded bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50">
+              {repairVotes.isPending ? 'Repairing…' : 'Repair leaked votes'}
+            </button>
           </div>
         )}
 
@@ -519,6 +548,19 @@ export default function Settings() {
       </div>
 
 
+      <div className="border rounded-lg p-6 bg-card shadow-sm">
+        <h2 className="text-xl font-semibold mb-2">Zotero</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Papers can be saved straight into the running Zotero desktop app (into the collection currently selected there), with the AI summary as a note. No API key needed.
+          {' '}Status: {zotero?.running ? <span className="text-emerald-600 font-semibold">Zotero is running</span> : <span className="text-muted-foreground">Zotero desktop not detected on this machine</span>}.
+        </p>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={zoteroAuto} onChange={e => setZoteroAuto(e.target.checked)} className="accent-primary" />
+          Automatically save every starred paper to Zotero
+        </label>
+        <p className="text-xs text-muted-foreground mt-2">Saved together with the API keys below. The RSS feed (button in the inbox header) keeps working as a fallback for machines without Zotero.</p>
+      </div>
+
       <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">
         <h2 className="text-xl font-semibold mb-2 text-red-700 dark:text-red-400">Data Management</h2>
         <p className="text-sm text-red-600/80 dark:text-red-400/80 mb-6">
@@ -530,10 +572,10 @@ export default function Settings() {
             if(window.confirm('Delete all papers that are neither starred nor voted on? This action cannot be undone.')) {
               try {
                 const res = await axios.delete('/items/unstarred');
-                alert(`Successfully deleted ${res.data.deleted} unstarred papers.`);
+                toast(`Deleted ${res.data.deleted} papers`, { kind: 'success' });
                 queryClient.invalidateQueries();
               } catch {
-                alert('Failed to clear unstarred papers.');
+                toast('Failed to clear papers', { kind: 'error' });
               }
             }
           }}

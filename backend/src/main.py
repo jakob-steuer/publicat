@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.api import dashboard, export, follows, items, rss, settings, topics
+from src.api import dashboard, export, follows, inbox, items, rss, settings, topics
 from src.database import SessionLocal, engine
 from src.db_migrate import upgrade
 
@@ -88,6 +88,7 @@ app.include_router(topics.router)
 app.include_router(settings.router)
 app.include_router(follows.router, prefix="/follows", tags=["Follows"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
+app.include_router(inbox.router, prefix="/inbox", tags=["Inbox"])
 app.include_router(rss.router, prefix="/rss", tags=["RSS"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 
@@ -97,10 +98,12 @@ if os.path.exists(frontend_dist):
     app.mount("/assets", StaticFiles(directory=os.path.join(frontend_dist, "assets")), name="assets")
 
     @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        # Let API 404s stay 404s instead of returning the React app
-        api_prefixes = ["items", "topics", "settings", "follows", "dashboard", "rss", "api"]
-        if any(full_path.startswith(prefix) for prefix in api_prefixes):
+    async def serve_frontend(full_path: str, request: Request):
+        # Unknown API paths stay 404 for API clients; a browser asking for HTML
+        # always gets the app, so deep links such as /settings work.
+        api_prefixes = ("items/", "topics/", "settings/", "follows/", "dashboard/", "inbox/", "rss/", "api/")
+        wants_html = "text/html" in request.headers.get("accept", "")
+        if not wants_html and full_path.startswith(api_prefixes):
             raise HTTPException(status_code=404, detail="Not Found")
 
         file_path = os.path.join(frontend_dist, full_path)

@@ -564,4 +564,23 @@ def vote_item(item_id: str, vote_req: VoteRequest, background_tasks: BackgroundT
     db.commit()
     for topic_id in touched:
         background_tasks.add_task(retrain_and_rescore, topic_id)
+    if vote_req.vote == 2:
+        auto = db.query(AppConfig).filter(AppConfig.key == "zotero_auto_push").first()
+        if auto and auto.value == "true":
+            background_tasks.add_task(_zotero_push_quietly, item_id)
     return {"status": "success", "topic_id": target.topic_id if target else None}
+
+
+async def _zotero_push_quietly(item_id: str) -> None:
+    from src.database import SessionLocal
+    from src.integrations.zotero import ZoteroUnavailable, push_items
+
+    db = SessionLocal()
+    try:
+        item = db.get(Item, item_id)
+        if item:
+            await push_items([item])
+    except ZoteroUnavailable as e:
+        print(f"Zotero auto-push skipped: {e}", flush=True)
+    finally:
+        db.close()

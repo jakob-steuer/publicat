@@ -218,3 +218,37 @@ def test_rescore_topic_handles_more_than_one_chunk(db):
     db.expire_all()
     assert db.query(ItemScore).filter(ItemScore.reasons == ["old"]).count() == 0
     assert db.query(ItemScore).filter(ItemScore.final_score > 1.0).count() == 0
+
+
+def test_repair_votes_keeps_best_fitting_topic_only(client, db):
+    t1, t2 = _topic(db, "A", 1), _topic(db, "B", 2)
+    leaked = _item(db, "leaked")
+    clean = _item(db, "clean")
+    db.add(ItemScore(item_id=leaked.id, topic_id=t1.id, semantic_score=0.2, final_score=0.2, user_vote=2))
+    db.add(ItemScore(item_id=leaked.id, topic_id=t2.id, semantic_score=0.8, final_score=0.8, user_vote=2))
+    db.add(ItemScore(item_id=clean.id, topic_id=t1.id, semantic_score=0.5, final_score=0.5, user_vote=1))
+    db.add(ItemScore(item_id=clean.id, topic_id=t2.id, semantic_score=0.5, final_score=0.5, user_vote=None))
+    db.commit()
+
+    assert client.get("/topics/vote_leaks").json() == {"items": 1, "rows": 2}
+    r = client.post("/topics/repair_votes").json()
+    assert r["items"] == 1 and r["cleared_rows"] == 1
+    db.expire_all()
+    votes = {(s.item_id, s.topic_id): s.user_vote for s in db.query(ItemScore).all()}
+    assert votes[(leaked.id, t1.id)] is None and votes[(leaked.id, t2.id)] == 2
+    assert votes[(clean.id, t1.id)] == 1
+    assert client.get("/topics/vote_leaks").json() == {"items": 0, "rows": 0}
+
+
+def test_deep_links_serve_the_app_but_api_404s_stay(client):
+    """/settings is both an API prefix and a page route; browsers must get the page."""
+    import os
+
+    from src import main
+
+    if not os.path.exists(main.frontend_dist):
+        return  # frontend not built in this environment
+    page = client.get("/settings", headers={"accept": "text/html,application/xhtml+xml"})
+    assert page.status_code == 200 and "<div id=\"root\">" in page.text
+    api = client.get("/items/nope/unknown", headers={"accept": "application/json"})
+    assert api.status_code in (404, 405)

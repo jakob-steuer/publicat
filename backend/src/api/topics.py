@@ -119,6 +119,44 @@ def read_models(db: Session = Depends(get_db)):
     return out
 
 
+def _leaked_items(db: Session) -> dict[str, list[ItemScore]]:
+    """Items whose identical vote was written to several topics by the old overview voting.
+
+    Signature: >= 2 voted rows for the item, all carrying the same vote.
+    """
+    rows = db.query(ItemScore).filter(ItemScore.user_vote.isnot(None)).all()
+    by_item: dict[str, list[ItemScore]] = {}
+    for s in rows:
+        by_item.setdefault(s.item_id, []).append(s)
+    return {iid: ss for iid, ss in by_item.items() if len(ss) >= 2 and len({x.user_vote for x in ss}) == 1}
+
+
+@router.get("/vote_leaks", response_model=dict)
+def vote_leaks(db: Session = Depends(get_db)):
+    leaked = _leaked_items(db)
+    return {"items": len(leaked), "rows": sum(len(v) for v in leaked.values())}
+
+
+@router.post("/repair_votes", response_model=dict)
+def repair_votes(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Keep each leaked vote only on the topic it fits best (highest description score), clear the copies, retrain."""
+    leaked = _leaked_items(db)
+    cleared = 0
+    touched: set[str] = set()
+    for scores in leaked.values():
+        keep = max(scores, key=lambda s: (s.semantic_score or 0.0, s.final_score or 0.0))
+        for s in scores:
+            touched.add(s.topic_id)
+            if s is not keep:
+                s.user_vote = None
+                s.voted_at = None
+                cleared += 1
+    db.commit()
+    for topic_id in touched:
+        background_tasks.add_task(prepare_topic, topic_id, False, None)
+    return {"status": "success", "items": len(leaked), "cleared_rows": cleared, "retraining_topics": len(touched)}
+
+
 @router.get("/search_papers", response_model=List[Dict[str, Any]])
 async def search_papers(q: str, limit: int = 8):
     """Semantic Scholar search for picking seed papers."""

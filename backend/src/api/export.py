@@ -58,6 +58,31 @@ def export_bibtex_starred(db: Session = Depends(get_db)):
         "Content-Disposition": 'attachment; filename="publikater_starred.bib"'
     })
 
+@router.get("/zotero/status", response_model=dict)
+async def zotero_status():
+    """Is the Zotero desktop app running locally (connector reachable)?"""
+    from src.integrations.zotero import ping
+
+    return {"running": await ping()}
+
+
+@router.post("/zotero/push", response_model=dict)
+async def zotero_push(request: ExportRequest, db: Session = Depends(get_db)):
+    """Save the given papers into the running Zotero desktop app (current collection)."""
+    from fastapi import HTTPException
+
+    from src.integrations.zotero import ZoteroUnavailable, push_items
+
+    items = db.query(Item).filter(Item.id.in_(request.item_ids)).all()
+    if not items:
+        raise HTTPException(status_code=404, detail="No items found")
+    try:
+        saved = await push_items(items)
+    except ZoteroUnavailable as e:
+        raise HTTPException(status_code=503, detail=f"Zotero desktop is not reachable on 127.0.0.1:23119. Start Zotero and try again. ({e})")
+    return {"status": "success", "saved": saved}
+
+
 @router.get("/zotero/rss", response_class=Response)
 def zotero_rss_feed(topic_id: Optional[str] = None, db: Session = Depends(get_db)):
     """

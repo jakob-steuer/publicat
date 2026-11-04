@@ -8,6 +8,7 @@ class SettingsUpdate(BaseModel):
     anthropic_budget_limit: Optional[float] = None
     enable_llm_reranking: Optional[bool] = None
     reranking_mode: Optional[str] = None
+    zotero_auto_push: Optional[bool] = None
     
 class SettingsResponse(BaseModel):
     gemini_api_key: str
@@ -16,4 +17,5 @@ class SettingsResponse(BaseModel):
     anthropic_budget_limit: float
     enable_llm_reranking: bool
     reranking_mode: str
+    zotero_auto_push: bool = False
     last_synced_at: Optional[str] = None

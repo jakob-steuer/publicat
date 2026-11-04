@@ -84,14 +84,9 @@ def get_dashboard(
         base_query = base_query.filter(Item.is_acknowledged == False)  # noqa: E712
 
     if not show_preprints:
-        is_preprint = (
-            Item.source.in_(["OAI-PMH (arXiv)", "bioRxiv"])
-            | Item.url.like("%arxiv%")
-            | Item.url.like("%biorxiv%")
-            | Item.url.like("%medrxiv%")
-            | Item.venue.in_(["arXiv.org", "bioRxiv", "medRxiv"])
-        )
-        base_query = base_query.filter(~is_preprint)
+        from src.api.inbox import preprint_clause
+
+        base_query = base_query.filter(~preprint_clause())
 
     now = datetime.datetime.now(datetime.timezone.utc)
     week_ago = now - datetime.timedelta(days=7)
