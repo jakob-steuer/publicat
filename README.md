@@ -141,6 +141,16 @@ The inbox is one ranked list per scope (all topics, one topic, or one author), w
 
 ---
 
+## Where your data lives
+
+Your papers, votes and settings are a single SQLite file in your user data directory, outside the app folder, so updating or re-cloning Publicat never touches them:
+
+- macOS: `~/Library/Application Support/Publicat/publicat.db`
+- Windows: `%APPDATA%\Publicat\publicat.db`
+- Linux: `~/.local/share/publicat/publicat.db`
+
+Older installations kept the database at `backend/publikater.db`; the first start copies it to the new location and leaves the old file untouched. Set `PUBLICAT_DATA_DIR` to use another folder, or `DATABASE_URL` for full control. Back up by copying that one file (while the app is stopped, or with `sqlite3 publicat.db ".backup copy.db"`).
+
 ## Semantic Scholar API Key (Highly Recommended)
 
 > [!IMPORTANT]

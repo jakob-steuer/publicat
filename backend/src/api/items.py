@@ -18,7 +18,7 @@ from src.models.item import Item
 from src.models.item_score import ItemScore
 from src.models.topic import Topic
 from src.ranking.paper import Paper, load_follows
-from src.ranking.scoring import score_paper
+from src.ranking.scoring import MIN_SCORE_TO_KEEP, score_paper
 from src.ranking.training import load_models, retrain_and_rescore
 from src.sources.oai_pmh import harvest_arxiv_oai, harvest_biorxiv_api
 from src.sources.orcid import orcid_recent_dois
@@ -79,6 +79,18 @@ async def _fetch_missing_abstract(doi: Optional[str], pmid: Optional[str]) -> Op
                         return re.sub(r"<[^>]+>", "", results[0]["abstractText"]).strip()
     except Exception as e:
         print(f"Fallback abstract fetch failed: {e}")
+    return None
+
+
+def preprint_venue(external_ids: dict) -> Optional[str]:
+    """Semantic Scholar returns an empty venue for most preprints; recover it from the ids."""
+    if external_ids.get("ArXiv"):
+        return "arXiv.org"
+    doi = (external_ids.get("DOI") or "").lower()
+    if doi.startswith("10.1101/"):
+        return "medRxiv" if "medrxiv" in doi else "bioRxiv"
+    if doi.startswith("10.26434/"):
+        return "ChemRxiv"
     return None
 
 
@@ -151,13 +163,18 @@ async def run_ingestion(db: Session, days_back: int = 3):
     sync_state["message"] = "Checking followed authors on ORCID..."
     sync_state["progress"] = 20
     for orcid in orcids:
-        all_identifiers.update(f"DOI:{doi}" for doi in await orcid_recent_dois(orcid, since))
+        dois = await orcid_recent_dois(orcid, since)
+        print(f"  discovery/orcid[{orcid}]: {len(dois)} recent DOIs", flush=True)
+        all_identifiers.update(f"DOI:{doi}" for doi in dois)
 
     sync_state["message"] = "Discovering preprints (arXiv, bioRxiv)..."
     sync_state["progress"] = 25
     arxiv_sets = sorted({c for t in active_topics for c in (t.arxiv_categories or [])}) or DEFAULT_ARXIV_SETS
-    all_identifiers.update(await harvest_arxiv_oai(arxiv_sets, since))
-    all_identifiers.update(f"DOI:{bid}" for bid in await harvest_biorxiv_api(since))
+    arxiv_ids = await harvest_arxiv_oai(arxiv_sets, since)
+    biorxiv_ids = await harvest_biorxiv_api(since)
+    print(f"  discovery/arxiv{arxiv_sets}: {len(arxiv_ids)}; discovery/biorxiv: {len(biorxiv_ids)}", flush=True)
+    all_identifiers.update(arxiv_ids)
+    all_identifiers.update(f"DOI:{bid}" for bid in biorxiv_ids)
 
     if sync_state["status"] == "aborted":
         return
@@ -167,6 +184,7 @@ async def run_ingestion(db: Session, days_back: int = 3):
     existing |= {f"DOI:{i[0]}" for i in db.query(Item.doi).filter(Item.doi.isnot(None)).all()}
     existing |= {f"CorpusId:{i[0]}" for i in db.query(Item.corpus_id).filter(Item.corpus_id.isnot(None)).all()}
     identifiers_list = [i for i in all_identifiers if i not in existing]
+    print(f"  discovery: {len(all_identifiers)} candidates, {len(identifiers_list)} not yet in the database", flush=True)
     if not identifiers_list:
         sync_state["message"] = "No new papers discovered."
         return
@@ -174,7 +192,9 @@ async def run_ingestion(db: Session, days_back: int = 3):
     # 2. ENRICHMENT ----------------------------------------------------------
     sync_state["message"] = f"Enriching {len(identifiers_list)} new papers via S2 batch..."
     sync_state["progress"] = 40
-    enriched_papers = [p for p in await enrich_papers_s2(identifiers_list) if _published_after(p, since - timedelta(days=7))]
+    enriched_all = await enrich_papers_s2(identifiers_list)
+    enriched_papers = [p for p in enriched_all if _published_after(p, since - timedelta(days=7))]
+    print(f"  enrichment: {len(enriched_all)} records from S2, {len(enriched_papers)} within the date window", flush=True)
 
     # 3. SCORING -------------------------------------------------------------
     sync_state["message"] = "Scoring papers..."
@@ -183,6 +203,7 @@ async def run_ingestion(db: Session, days_back: int = 3):
     models = load_models(db, active_topics)
 
     total = len(enriched_papers)
+    stored = 0
     for idx, paper in enumerate(enriched_papers):
         sync_state["message"] = f"Scoring papers ({idx + 1}/{total})..."
         sync_state["progress"] = 60 + int((idx / max(1, total)) * 20)
@@ -209,6 +230,8 @@ async def run_ingestion(db: Session, days_back: int = 3):
         title = paper.get("title") or "Unknown Title"
         abstract = paper.get("abstract") or await _fetch_missing_abstract(doi, pmid) or "No abstract available."
         paper["abstract"] = abstract
+        if not paper.get("venue"):
+            paper["venue"] = preprint_venue(external_ids)
 
         features = Paper.from_s2(paper)
         if features.embedding is None:
@@ -250,8 +273,10 @@ async def run_ingestion(db: Session, days_back: int = 3):
         db.flush()
         for ts in topic_scores:
             db.add(ItemScore(item_id=db_item.id, topic_id=ts.topic_id, semantic_score=ts.semantic_score, final_score=ts.final_score, reasons=ts.reasons))
+        stored += 1
 
     db.commit()
+    print(f"  scoring: {total} candidates scored, {stored} stored (>= {MIN_SCORE_TO_KEEP:.2f} relevance or keyword/author/journal signal)", flush=True)
 
 
 def cleanup_old_items(db: Session) -> int:

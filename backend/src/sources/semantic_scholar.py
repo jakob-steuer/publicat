@@ -119,20 +119,26 @@ async def discover_new_papers_s2(topics: List[Any], since: datetime, feedback: D
     """
     feedback = feedback or {}
     discovered: Dict[str, Dict[str, Any]] = {}
+    stats: Dict[str, int] = {}
 
-    def add(papers):
+    def add(source: str, papers):
+        kept = 0
         for p in papers:
             if p and p.get("paperId") and _published_after(p, since):
+                kept += 1
                 discovered.setdefault(p["paperId"], p)
+        stats[source] = stats.get(source, 0) + kept
+        print(f"  discovery/{source}: {len(papers)} returned, {kept} within window", flush=True)
 
     async with httpx.AsyncClient() as client:
         for topic in topics:
-            add(await search_papers_bulk_s2(client, _query_for_topic(topic), since))
+            add(f"search[{topic.name[:24]}]", await search_papers_bulk_s2(client, _query_for_topic(topic), since))
             fb = feedback.get(topic.id) or {}
             if fb.get("positive"):
-                add(await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])))
+                add(f"recommend[{topic.name[:24]}]", await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])))
         for author_id in author_ids or []:
-            add(await author_papers_s2(client, author_id))
+            add(f"author[{author_id}]", await author_papers_s2(client, author_id))
+    print(f"  discovery/S2 total unique: {len(discovered)}", flush=True)
     return list(discovered.values())
 
 

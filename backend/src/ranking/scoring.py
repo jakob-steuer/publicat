@@ -15,7 +15,10 @@ from src.ranking.model import RankerModel
 from src.ranking.paper import Follows, Paper, author_matches, load_follows  # noqa: F401  (re-exported)
 
 # Papers below this probability (and without a keyword/author hit) are not stored for a topic.
-MIN_SCORE_TO_KEEP = 0.15
+# A typical unrelated paper sits at ~0.12 under the prior; 0.25 is about one standard
+# deviation above typical. Measured on a 3-day live run: 0.15 kept 406 papers of which
+# 265 scored under 0.25, i.e. pure noise that only fills the database.
+MIN_SCORE_TO_KEEP = 0.25
 
 
 @dataclass

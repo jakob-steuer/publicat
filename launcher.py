@@ -73,6 +73,13 @@ def main():
 
     # 3. Initialize Database
     print("\n[3/4] Initializing Database Schema...")
+    sys.path.insert(0, backend_dir)
+    try:
+        from src.paths import database_path
+
+        print(f"Database: {os.environ.get('DATABASE_URL') or database_path()}")
+    except Exception as e:
+        print(f"(could not resolve data directory: {e})")
     env = os.environ.copy()
     env["PYTHONPATH"] = backend_dir
     run_command([sys.executable, "scripts/init_db.py"], cwd=backend_dir, env=env)

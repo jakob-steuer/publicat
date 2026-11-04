@@ -94,3 +94,23 @@ def test_zotero_item_builder_and_unavailable(client, db, monkeypatch):
     r = client.post("/api/export/zotero/push", json={"item_ids": [it.id]})
     assert r.status_code == 503 and "Zotero" in r.json()["detail"]
     assert client.get("/api/export/zotero/status").json() == {"running": False}
+
+
+def test_orcid_year_only_dates_count_as_recent():
+    from datetime import datetime
+
+    from src.sources.orcid import _work_date
+
+    assert _work_date({"publication-date": {"year": {"value": "2026"}}})[0] == datetime(2026, 12, 31)
+    assert _work_date({"publication-date": {"year": {"value": "2026"}, "month": {"value": "3"}}})[0] == datetime(2026, 3, 1)
+    assert _work_date({"publication-date": {"year": {"value": "2026"}, "month": {"value": "2"}, "day": {"value": "30"}}})[0] == datetime(2026, 12, 31)
+    assert _work_date({})[0] is None
+
+
+def test_preprint_venue_recovered_from_ids():
+    from src.api.items import preprint_venue
+
+    assert preprint_venue({"ArXiv": "2511.01234"}) == "arXiv.org"
+    assert preprint_venue({"DOI": "10.1101/2026.11.01.123456"}) == "bioRxiv"
+    assert preprint_venue({"DOI": "10.1101/2026.11.01.123456medrxiv"}) == "medRxiv"
+    assert preprint_venue({"DOI": "10.1038/s41586-026-00001-1"}) is None

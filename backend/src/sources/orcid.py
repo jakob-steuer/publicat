@@ -8,18 +8,22 @@ import httpx
 ORCID_WORKS_URL = "https://pub.orcid.org/v3.0/{orcid}/works"
 
 
-def _work_date(summary: dict) -> datetime | None:
+def _work_date(summary: dict) -> tuple[datetime | None, bool]:
+    """Returns (date, precise). ORCID often has only a year; such works get Dec 31 of
+    that year so a year-only 2026 work still counts as recent in November 2026."""
     pd = summary.get("publication-date") or {}
     try:
         year = int((pd.get("year") or {}).get("value"))
     except (TypeError, ValueError):
-        return None
-    month = int(((pd.get("month") or {}).get("value")) or 1)
-    day = int(((pd.get("day") or {}).get("value")) or 1)
+        return None, False
+    month = (pd.get("month") or {}).get("value")
+    day = (pd.get("day") or {}).get("value")
+    if not month:
+        return datetime(year, 12, 31), False
     try:
-        return datetime(year, month, day)
+        return datetime(year, int(month), int(day or 1)), bool(day)
     except ValueError:
-        return datetime(year, 1, 1)
+        return datetime(year, 12, 31), False
 
 
 async def orcid_recent_dois(orcid: str, since: datetime) -> list[str]:
@@ -38,7 +42,7 @@ async def orcid_recent_dois(orcid: str, since: datetime) -> list[str]:
     since_naive = since.replace(tzinfo=None)
     for group in data.get("group", []):
         for summary in group.get("work-summary", []):
-            date = _work_date(summary)
+            date, _precise = _work_date(summary)
             if date is not None and date < since_naive:
                 continue
             for ext in (summary.get("external-ids") or {}).get("external-id", []):
