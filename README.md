@@ -97,7 +97,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 Publicat uses AI to semantically match papers to your topics. The better you describe your topic, the better your initial feed will be!
 
-**Continuous Active Learning:** Publicat features a dynamic reranking system. As you Star (⭐), Upvote (👍), or Downvote (👎) papers in your feed, Publicat dynamically calculates personalized "pro" and "anti" concept vectors specifically for that topic. This means that while a good initial topic definition is important, the AI will continuously develop, personalize, and improve its scoring based entirely on your personal reading preferences and rankings.
+**How ranking works:** every topic has its own small ranker, a logistic-regression model over the paper's Semantic Scholar SPECTER2 embedding plus a few readable features (keyword hits, followed authors, journal tier, preprint, LLM judge). Before you vote, it ranks by similarity to the topic vector, which is built from your **seed papers** (or, lacking those, from Semantic Scholar search results for the topic). Every Star (⭐), Upvote (👍), Neutral (➖) or Downvote (👎) retrains that topic's model within seconds and rescores its papers, so feedback is visible on the next feed load. Votes are attributed to exactly one topic, so topics never learn from each other's feedback. Click the score bubble on any card to see why it scored the way it did; the Settings page shows each ranker's vote counts and cross-validated accuracy. `Exclude keywords` are a hard filter.
 
 ### Example LLM Prompt to Generate a Great Topic
 If you're unsure how to describe your topic, ask an LLM of your choice:

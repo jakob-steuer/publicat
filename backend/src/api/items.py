@@ -11,25 +11,24 @@ from sqlalchemy.orm import Session
 
 from src.api.serialize import item_to_dict
 from src.database import get_db
-from src.embeddings import get_embedding
 from src.llm.pipeline import run_summarization_pipeline
 from src.models.app_config import AppConfig
+from src.models.follow import Follow
 from src.models.item import Item
 from src.models.item_score import ItemScore
 from src.models.topic import Topic
-from src.ranking.scoring import (
-    Paper,
-    compute_topic_vectors,
-    load_follows,
-    score_paper,
-    should_keep,
-)
+from src.ranking.paper import Paper, load_follows
+from src.ranking.scoring import score_paper
+from src.ranking.training import load_models, retrain_and_rescore
 from src.sources.oai_pmh import harvest_arxiv_oai, harvest_biorxiv_api
-from src.sources.semantic_scholar import discover_new_papers_s2, enrich_papers_s2
+from src.sources.orcid import orcid_recent_dois
+from src.sources.semantic_scholar import _published_after, discover_new_papers_s2, enrich_papers_s2
 
 router = APIRouter(prefix="/items", tags=["items"])
 
 CLEANUP_AFTER = timedelta(weeks=8)
+DEFAULT_ARXIV_SETS = ["cs", "q-bio"]
+FEEDBACK_SEEDS = 100  # most recent positive/negative votes handed to the S2 recommender
 
 # Global state to track sync progress
 sync_state = {
@@ -92,11 +91,38 @@ def _parse_published_at(paper: dict) -> datetime:
             return datetime.strptime(pub_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
             pass
-    # Only a year: older years go to Jan 1st; the current year stays "now" so it
-    # still surfaces as new in the feed.
     if pub_year and pub_year < published_at.year:
         return datetime(pub_year, 1, 1, tzinfo=timezone.utc)
     return published_at
+
+
+def _topic_feedback(db: Session, topics: List[Topic]) -> dict:
+    """Semantic Scholar paper ids of each topic's positive and negative votes (newest first)."""
+    feedback = {}
+    for topic in topics:
+        rows = (
+            db.query(ItemScore.user_vote, Item.source_native_id)
+            .join(Item, ItemScore.item_id == Item.id)
+            .filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None), Item.source == "SemanticScholar")
+            .order_by(ItemScore.voted_at.desc().nullslast(), Item.published_at.desc())
+            .all()
+        )
+        feedback[topic.id] = {
+            "positive": [pid for vote, pid in rows if vote >= 1 and pid][:FEEDBACK_SEEDS],
+            "negative": [pid for vote, pid in rows if vote == -1 and pid][:FEEDBACK_SEEDS],
+        }
+    return feedback
+
+
+def _local_embedding(title: str, abstract: str) -> Optional[list]:
+    """Local SPECTER2 only as a last resort; works without torch installed (returns None)."""
+    try:
+        from src.embeddings import get_embedding
+
+        return get_embedding(f"{title}. {abstract}")
+    except Exception as e:
+        print(f"Local embedding unavailable: {e}")
+        return None
 
 
 async def run_ingestion(db: Session, days_back: int = 3):
@@ -105,24 +131,32 @@ async def run_ingestion(db: Session, days_back: int = 3):
     sync_state["progress"] = 5
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
 
-    active_topics = db.query(Topic).filter(Topic.is_active == True, Topic.embedding.isnot(None)).all()  # noqa: E712
+    active_topics = db.query(Topic).filter(Topic.is_active == True).all()  # noqa: E712
+    active_topics = [t for t in active_topics if t.prior_vector or t.embedding]
     if not active_topics:
         sync_state["message"] = "No active topics."
         return
 
-    # 1. DISCOVERY
-    sync_state["message"] = "Discovering papers via Semantic Scholar..."
+    follows = db.query(Follow).filter(Follow.entity_type == "author").all()
+    s2_author_ids = [f.entity_value.split(":", 1)[1] for f in follows if f.entity_value.startswith("AUTHOR_ID:")]
+    orcids = [f.entity_value.split(":", 1)[1] for f in follows if f.entity_value.startswith("ORCID:")]
+
+    # 1. DISCOVERY -----------------------------------------------------------
+    sync_state["message"] = "Discovering papers via Semantic Scholar (search, recommendations, authors)..."
     sync_state["progress"] = 10
     all_identifiers = set()
-    for p in await discover_new_papers_s2(active_topics, since):
-        if p.get("paperId"):
-            all_identifiers.add(p["paperId"])
-        elif p.get("corpusId"):
-            all_identifiers.add(f"CorpusId:{p['corpusId']}")
+    for p in await discover_new_papers_s2(active_topics, since, feedback=_topic_feedback(db, active_topics), author_ids=s2_author_ids):
+        all_identifiers.add(p["paperId"])
 
-    sync_state["message"] = "Discovering preprints via OAI-PMH..."
+    sync_state["message"] = "Checking followed authors on ORCID..."
+    sync_state["progress"] = 20
+    for orcid in orcids:
+        all_identifiers.update(f"DOI:{doi}" for doi in await orcid_recent_dois(orcid, since))
+
+    sync_state["message"] = "Discovering preprints (arXiv, bioRxiv)..."
     sync_state["progress"] = 25
-    all_identifiers.update(await harvest_arxiv_oai(["cs", "q-bio"], since))
+    arxiv_sets = sorted({c for t in active_topics for c in (t.arxiv_categories or [])}) or DEFAULT_ARXIV_SETS
+    all_identifiers.update(await harvest_arxiv_oai(arxiv_sets, since))
     all_identifiers.update(f"DOI:{bid}" for bid in await harvest_biorxiv_api(since))
 
     if sync_state["status"] == "aborted":
@@ -137,25 +171,23 @@ async def run_ingestion(db: Session, days_back: int = 3):
         sync_state["message"] = "No new papers discovered."
         return
 
-    # 2. ENRICHMENT
+    # 2. ENRICHMENT ----------------------------------------------------------
     sync_state["message"] = f"Enriching {len(identifiers_list)} new papers via S2 batch..."
     sync_state["progress"] = 40
-    enriched_papers = await enrich_papers_s2(identifiers_list)
+    enriched_papers = [p for p in await enrich_papers_s2(identifiers_list) if _published_after(p, since - timedelta(days=7))]
 
-    # 3. SCORING
-    sync_state["message"] = "Processing and scoring papers..."
+    # 3. SCORING -------------------------------------------------------------
+    sync_state["message"] = "Scoring papers..."
     sync_state["progress"] = 60
-    follows = load_follows(db)
-    topic_vectors = compute_topic_vectors(db, active_topics)
+    follow_ctx = load_follows(db)
+    models = load_models(db, active_topics)
 
     total = len(enriched_papers)
     for idx, paper in enumerate(enriched_papers):
-        sync_state["message"] = f"Processing and scoring papers ({idx + 1}/{total})..."
+        sync_state["message"] = f"Scoring papers ({idx + 1}/{total})..."
         sync_state["progress"] = 60 + int((idx / max(1, total)) * 20)
         if sync_state["status"] == "aborted":
             return
-        if not paper:
-            continue
 
         corpus_id = str(paper.get("corpusId")) if paper.get("corpusId") is not None else None
         external_ids = paper.get("externalIds") or {}
@@ -180,12 +212,13 @@ async def run_ingestion(db: Session, days_back: int = 3):
 
         features = Paper.from_s2(paper)
         if features.embedding is None:
-            # Semantic Scholar had no SPECTER2 vector: compute one locally.
-            features.embedding = get_embedding(f"{title}. {abstract}")
+            features.embedding = _local_embedding(title, abstract)
         await asyncio.sleep(0)  # yield to the event loop between papers
+        if features.embedding is None:
+            continue
 
-        topic_scores, max_final, boost = score_paper(features, active_topics, topic_vectors, follows)
-        if not should_keep(max_final, boost):
+        topic_scores = score_paper(features, active_topics, models, follow_ctx)
+        if not topic_scores:
             continue
 
         tldr_obj = paper.get("tldr")
@@ -346,7 +379,7 @@ def _library(db: Session, flag_column, default_vote: int) -> List[dict]:
             .first()
         )
         vote = score.user_vote if score and score.user_vote is not None else default_vote
-        results.append(item_to_dict(item, score.final_score if score else None, vote, score.topic_id if score else None))
+        results.append(item_to_dict(item, score.final_score if score else None, vote, score.topic_id if score else None, reasons=score.reasons if score else None))
     return results
 
 
@@ -446,8 +479,6 @@ async def bulk_rescore(req: BulkRescoreRequest, db: Session = Depends(get_db)):
         if identifiers:
             try:
                 for data in await enrich_papers_s2(identifiers):
-                    if not data:
-                        continue
                     cid = data.get("corpusId")
                     doi = (data.get("externalIds") or {}).get("DOI")
                     match = item_map.get(f"CorpusId:{cid}") or item_map.get(str(data.get("paperId"))) or item_map.get(f"DOI:{doi}")
@@ -464,14 +495,15 @@ async def bulk_rescore(req: BulkRescoreRequest, db: Session = Depends(get_db)):
 
     active_topics = db.query(Topic).filter(Topic.is_active == True).all()  # noqa: E712
     follows = load_follows(db)
-    topic_vectors = compute_topic_vectors(db, active_topics)
+    models = load_models(db, active_topics)
+    existing_llm = {(s.item_id, s.topic_id): s.llm_relevance_score for s in db.query(ItemScore).filter(ItemScore.item_id.in_(req.item_ids)).all()}
 
     for item in items:
         features = Paper.from_item(item)
         if features.embedding is None:
             continue
-        topic_scores, _max_final, _boost = score_paper(features, active_topics, topic_vectors, follows)
-        for ts in topic_scores:
+        llm = {t.id: existing_llm.get((item.id, t.id)) for t in active_topics}
+        for ts in score_paper(features, active_topics, models, follows, llm_scores={k: v for k, v in llm.items() if v is not None}):
             entry = db.query(ItemScore).filter(ItemScore.item_id == item.id, ItemScore.topic_id == ts.topic_id).first()
             if not entry:
                 entry = ItemScore(item_id=item.id, topic_id=ts.topic_id)
@@ -489,8 +521,8 @@ class VoteRequest(BaseModel):
 
 
 @router.post("/{item_id}/vote", response_model=dict)
-def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)):
-    """Record a vote.
+def vote_item(item_id: str, vote_req: VoteRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Record a vote and retrain that topic's ranker in the background.
 
     The vote is training signal for exactly one topic: the one passed in, or,
     when voting from the overview feed, the topic that gave the item its best
@@ -517,12 +549,19 @@ def vote_item(item_id: str, vote_req: VoteRequest, db: Session = Depends(get_db)
     elif scores:
         target = max(scores, key=lambda s: s.final_score or 0.0)
 
+    touched: set[str] = set()
     if vote_req.vote is None:
-        # Un-rating clears the signal everywhere so nothing stale lingers.
         for s in scores:
+            if s.user_vote is not None:
+                touched.add(s.topic_id)
             s.user_vote = None
+            s.voted_at = None
     elif target is not None:
         target.user_vote = vote_req.vote
+        target.voted_at = datetime.now(timezone.utc)
+        touched.add(target.topic_id)
 
     db.commit()
+    for topic_id in touched:
+        background_tasks.add_task(retrain_and_rescore, topic_id)
     return {"status": "success", "topic_id": target.topic_id if target else None}

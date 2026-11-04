@@ -1,95 +1,139 @@
-from typing import List
+import asyncio
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.database import SessionLocal, get_db
-from src.embeddings import get_embedding
-from src.models.item import Item
 from src.models.item_score import ItemScore
 from src.models.topic import Topic
-from src.ranking.scoring import Paper, compute_topic_vectors, load_follows, score_against_topic, global_boost
-from src.schemas.topic import TopicCreate, TopicResponse, TopicUpdate
+from src.models.topic_model import TopicModel
+from src.ranking.paper import load_follows
+from src.ranking.topic_vector import build_prior_vector
+from src.ranking.training import is_busy, mark_busy, rescore_topic, train_topic
+from src.schemas.topic import TopicCreate, TopicModelStats, TopicResponse, TopicUpdate
+from src.sources.semantic_scholar import search_papers_s2
 
 router = APIRouter(prefix="/topics", tags=["topics"])
 
 
-def _topic_text(name: str, description: str, keywords: str | None) -> str:
+def _topic_text(name: str, description: str, keywords: Optional[str]) -> str:
     text = f"{name}. {description}"
     if keywords:
         text += f". Keywords: {keywords}"
     return text
 
 
-def rescore_topic(db: Session, topic: Topic) -> int:
-    """(Re)compute this topic's score for every stored paper, keeping existing votes."""
-    existing_votes = {
-        s.item_id: s.user_vote
-        for s in db.query(ItemScore).filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None)).all()
-    }
-    db.query(ItemScore).filter(ItemScore.topic_id == topic.id).delete(synchronize_session=False)
-    db.commit()
+def _local_embedding(text: str) -> Optional[list]:
+    """Legacy local SPECTER2 vector; optional (returns None without torch / model)."""
+    try:
+        from src.embeddings import get_embedding
 
-    follows = load_follows(db)
-    topic_vectors = compute_topic_vectors(db, [topic])
-    written = 0
-    for item in db.query(Item).yield_per(500):
-        paper = Paper.from_item(item)
-        if paper.embedding is None:
-            paper.embedding = get_embedding(f"{item.title}. {item.abstract}")
-            item.embedding = paper.embedding
-        boost, boost_reasons = global_boost(paper, follows)
-        ts = score_against_topic(paper, topic, topic_vectors, boost, boost_reasons)
-        if ts is None:
-            continue
-        keep = ts.final_score >= 0.20 or boost > 0.0 or ts.keyword_boost > 0.0 or item.id in existing_votes
-        if not keep:
-            continue
-        db.add(
-            ItemScore(
-                item_id=item.id,
-                topic_id=topic.id,
-                semantic_score=ts.semantic_score,
-                final_score=ts.final_score,
-                reasons=ts.reasons,
-                user_vote=existing_votes.get(item.id),
-            )
-        )
-        written += 1
-    db.commit()
-    return written
+        return get_embedding(text)
+    except Exception as e:
+        print(f"Local topic embedding skipped: {e}")
+        return None
+
+
+def _response(topic: Topic) -> dict:
+    d = {c.name: getattr(topic, c.name) for c in Topic.__table__.columns if c.name not in ("embedding", "prior_vector")}
+    d["has_prior_vector"] = bool(topic.prior_vector or topic.embedding)
+    return d
+
+
+async def prepare_topic(topic_id: str, rescore_all: bool, then_sync_days: Optional[int] = None) -> None:
+    """Background: build the S2-space topic vector, train, rescore, optionally fetch."""
+    db = SessionLocal()
+    try:
+        topic = db.get(Topic, topic_id)
+        if not topic:
+            return
+        vector, source = await build_prior_vector(topic)
+        if vector is not None:
+            topic.prior_vector = vector
+            db.commit()
+        print(f"Topic '{topic.name}': prior vector from {source}", flush=True)
+
+        def train_and_rescore():
+            mark_busy(topic_id, True)
+            try:
+                follows = load_follows(db)
+                model = train_topic(db, topic, follows)
+                n = rescore_topic(db, topic, model, follows, all_items=rescore_all)
+                print(f"Topic '{topic.name}': scored {n} papers (CV AUC {model.cv_auc})", flush=True)
+            finally:
+                mark_busy(topic_id, False)
+
+        await asyncio.to_thread(train_and_rescore)
+
+        if then_sync_days:
+            from src.api.items import full_sync
+
+            await full_sync(db, days_back=then_sync_days)
+    except Exception as e:
+        print(f"prepare_topic failed for {topic_id}: {e!r}", flush=True)
+    finally:
+        db.close()
 
 
 @router.post("/", response_model=TopicResponse)
 def create_topic(topic_in: TopicCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    data = topic_in.model_dump()
+    data["seed_papers"] = [s for s in (data.get("seed_papers") or [])] or None
     db_topic = Topic(
-        **topic_in.model_dump(),
-        embedding=get_embedding(_topic_text(topic_in.name, topic_in.description, topic_in.keywords)),
+        **data,
+        embedding=_local_embedding(_topic_text(topic_in.name, topic_in.description, topic_in.keywords)),
         user_id="1",  # single-user MVP
     )
     db.add(db_topic)
     db.commit()
     db.refresh(db_topic)
-
-    rescore_topic(db, db_topic)
-
-    async def init_topic_task(topic_id: str):
-        from src.api.items import full_sync
-
-        db_bg = SessionLocal()
-        try:
-            print(f"Starting 30-day ingestion for new topic {topic_id}...")
-            await full_sync(db_bg, days_back=30)
-        finally:
-            db_bg.close()
-
-    background_tasks.add_task(init_topic_task, db_topic.id)
-    return db_topic
+    background_tasks.add_task(prepare_topic, db_topic.id, True, 30)
+    return _response(db_topic)
 
 
 @router.get("/", response_model=List[TopicResponse])
 def read_topics(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(Topic).filter(Topic.user_id == "1").offset(skip).limit(limit).all()
+    return [_response(t) for t in db.query(Topic).filter(Topic.user_id == "1").offset(skip).limit(limit).all()]
+
+
+@router.get("/models", response_model=Dict[str, TopicModelStats])
+def read_models(db: Session = Depends(get_db)):
+    """Training state of every topic's ranker (for the topic settings page)."""
+    out = {}
+    for topic in db.query(Topic).filter(Topic.user_id == "1").all():
+        row = db.get(TopicModel, topic.id)
+        out[topic.id] = TopicModelStats(
+            topic_id=topic.id,
+            trained=bool(row and row.payload.get("trained_at")),
+            n_pos=row.n_pos if row else 0,
+            n_neg=row.n_neg if row else 0,
+            cv_auc=row.cv_auc if row else None,
+            trained_at=row.trained_at if row else None,
+            prior_source="seeds" if topic.seed_papers else ("s2_search" if topic.prior_vector else ("local" if topic.embedding else None)),
+            extra={
+                "labels": db.query(ItemScore).filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None)).count(),
+                "busy": is_busy(topic.id),
+            },
+        )
+    return out
+
+
+@router.get("/search_papers", response_model=List[Dict[str, Any]])
+async def search_papers(q: str, limit: int = 8):
+    """Semantic Scholar search for picking seed papers."""
+    results = await search_papers_s2(q, limit=limit)
+    return [
+        {
+            "paperId": r.get("paperId"),
+            "title": r.get("title"),
+            "year": r.get("year"),
+            "venue": r.get("venue"),
+            "authors": [a.get("name") for a in (r.get("authors") or [])][:4],
+        }
+        for r in results
+        if r.get("paperId")
+    ]
 
 
 @router.put("/{topic_id}", response_model=TopicResponse)
@@ -98,29 +142,23 @@ def update_topic(topic_id: str, topic_in: TopicUpdate, background_tasks: Backgro
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
 
-    if topic_in.name is not None:
-        topic.name = topic_in.name
-    if topic_in.description is not None:
-        topic.description = topic_in.description
-    if topic_in.keywords is not None:
-        topic.keywords = topic_in.keywords
-    topic.embedding = get_embedding(_topic_text(topic.name, topic.description, topic.keywords))
+    changes = topic_in.model_dump(exclude_unset=True)
+    for key, value in changes.items():
+        setattr(topic, key, value)
+    if any(k in changes for k in ("name", "description", "keywords")):
+        topic.embedding = _local_embedding(_topic_text(topic.name, topic.description, topic.keywords))
     db.commit()
     db.refresh(topic)
+    background_tasks.add_task(prepare_topic, topic.id, True, None)
+    return _response(topic)
 
-    def rescore_task(t_id: str):
-        db_bg = SessionLocal()
-        try:
-            t = db_bg.query(Topic).filter(Topic.id == t_id).first()
-            if t:
-                print(f"Rescoring for topic {t.name}: {rescore_topic(db_bg, t)} scores written.")
-        except Exception as e:
-            print(f"Error rescoring topic {t_id}: {e}")
-        finally:
-            db_bg.close()
 
-    background_tasks.add_task(rescore_task, topic.id)
-    return topic
+@router.post("/{topic_id}/retrain", response_model=dict)
+def retrain(topic_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    if not db.get(Topic, topic_id):
+        raise HTTPException(status_code=404, detail="Topic not found")
+    background_tasks.add_task(prepare_topic, topic_id, True, None)
+    return {"status": "scheduled"}
 
 
 @router.delete("/{topic_id}")
@@ -129,6 +167,7 @@ def delete_topic(topic_id: str, db: Session = Depends(get_db)):
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     db.query(ItemScore).filter(ItemScore.topic_id == topic_id).delete(synchronize_session=False)
+    db.query(TopicModel).filter(TopicModel.topic_id == topic_id).delete(synchronize_session=False)
     db.delete(topic)
     db.commit()
     return {"status": "success"}

@@ -2,8 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import React, { useState } from 'react'
 
-import type { Topic, Follow, Settings as AppSettings } from '../types'
+import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
+import { TopicForm } from '../components/TopicForm'
+import { emptyDraft, payloadFromDraft } from '../lib/topicDraft'
 
 interface AuthorResult {
   authorId: string | null;
@@ -35,9 +37,7 @@ export default function Settings() {
   const queryClient = useQueryClient()
   
   // Topic state
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [keywords, setKeywords] = useState('')
+  const [draft, setDraft] = useState<TopicDraft>(emptyDraft)
   const [isCreating, setIsCreating] = useState(false)
   
   // Edit Topic state
@@ -59,7 +59,16 @@ export default function Settings() {
   const [isSearchingAuthor, setIsSearchingAuthor] = useState(false)
   const [authorBoost, setAuthorBoost] = useState('0.15')
 
-  const { data: topics, isLoading: isLoadingTopics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
+  const { data: topics, isLoading: isLoadingTopics } = useQuery<Topic[]>({ queryKey: ['topics'], queryFn: fetchTopics })
+  const { data: topicModels } = useQuery<Record<string, TopicModelStats>>({
+    queryKey: ['topicModels'],
+    queryFn: async () => (await axios.get('/topics/models')).data,
+    refetchInterval: 15000,
+  })
+  const retrainTopic = useMutation({
+    mutationFn: async (topicId: string) => axios.post(`/topics/${topicId}/retrain`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topicModels'] }),
+  })
   const { data: config } = useQuery<AppSettings>({
     queryKey: ['settings'],
     queryFn: fetchSettings,
@@ -126,16 +135,16 @@ export default function Settings() {
   }, [authorQuery])
 
   const createTopic = useMutation({
-    mutationFn: async (newTopic: Partial<Topic>) => {
-      return axios.post('/topics/', newTopic)
+    mutationFn: async (payload: ReturnType<typeof payloadFromDraft>) => {
+      return axios.post('/topics/', payload)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
-      setName('')
-      setDescription('')
-      setKeywords('')
+      queryClient.invalidateQueries({ queryKey: ['topicModels'] })
+      setDraft(emptyDraft)
       setIsCreating(false)
     },
+    onError: () => setIsCreating(false),
   })
 
   const deleteTopic = useMutation({
@@ -148,8 +157,8 @@ export default function Settings() {
   })
 
   const updateTopic = useMutation({
-    mutationFn: async ({ id, name, description, keywords }: { id: string, name: string, description: string, keywords: string }) => {
-      return axios.put(`/topics/${id}`, { name, description, keywords: keywords || undefined })
+    mutationFn: async ({ id, draft }: { id: string, draft: TopicDraft }) => {
+      return axios.put(`/topics/${id}`, payloadFromDraft(draft))
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -164,9 +173,9 @@ export default function Settings() {
     }
   })
 
-  const handleEditTopicSave = (id: string, name: string, description: string, keywords: string) => {
+  const handleEditTopicSave = (id: string, topicDraft: TopicDraft) => {
     setIsUpdatingTopic(true)
-    updateTopic.mutate({ id, name, description, keywords })
+    updateTopic.mutate({ id, draft: topicDraft })
   }
 
   const saveSettings = useMutation({
@@ -199,9 +208,19 @@ export default function Settings() {
 
   const handleCreateTopic = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name || !description) return
+    if (!draft.name || !draft.description) return
     setIsCreating(true)
-    createTopic.mutate({ name, description, keywords: keywords || undefined, priority: 1, is_active: true })
+    createTopic.mutate(payloadFromDraft(draft))
+  }
+
+  const describeModel = (m?: TopicModelStats) => {
+    if (!m) return 'No ranker yet'
+    const labels = (m.n_pos ?? 0) + (m.n_neg ?? 0)
+    if (!m.trained || labels === 0) return 'Ranker: description only (vote on papers to train it)'
+    const auc = m.cv_auc != null ? ` · accuracy (CV AUC) ${m.cv_auc.toFixed(2)}` : ' · too few votes to measure accuracy'
+    const when = m.trained_at ? ` · trained ${new Date(m.trained_at).toLocaleString()}` : ''
+    const busy = m.extra?.busy ? ' · rescoring…' : ''
+    return `Ranker trained on ${m.n_pos} positive / ${m.n_neg} negative votes${auc}${when}${busy}`
   }
 
   const handleSaveConfig = (e: React.FormEvent) => {
@@ -230,12 +249,24 @@ export default function Settings() {
         ) : (
           <div className="space-y-4 mb-6">
             {topics?.map((topic: Topic) => (
-              <div key={topic.id} className="flex justify-between items-center p-4 border rounded bg-background">
-                <div>
+              <div key={topic.id} className="flex justify-between items-center p-4 border rounded bg-background gap-4">
+                <div className="min-w-0">
                   <h3 className="font-semibold">{topic.name}</h3>
                   <p className="text-sm text-muted-foreground">{topic.description}</p>
                   {topic.keywords && <p className="text-xs text-primary mt-1 font-semibold">Keywords: {topic.keywords}</p>}
+                  {topic.exclude_keywords && <p className="text-xs text-destructive mt-0.5 font-semibold">Excludes: {topic.exclude_keywords}</p>}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {topic.seed_papers?.length ? `${topic.seed_papers.length} seed papers` : 'No seed papers (topic vector from description search)'}
+                    {' · '}{describeModel(topicModels?.[topic.id])}
+                  </p>
                 </div>
+                  <button 
+                    onClick={() => retrainTopic.mutate(topic.id)}
+                    className="text-muted-foreground hover:bg-muted px-3 py-1 rounded transition-colors mr-2 text-sm"
+                    title="Rebuild topic vector, retrain the ranker on your votes and rescore all papers"
+                  >
+                    Retrain
+                  </button>
                   <button 
                     onClick={() => {
                       setEditingTopic(topic)
@@ -260,43 +291,13 @@ export default function Settings() {
         <div className="pt-4 border-t">
           <h3 className="font-semibold mb-4">Add New Topic</h3>
           <form onSubmit={handleCreateTopic} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Topic Name</label>
-              <input 
-                type="text" 
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="e.g. Protein Design"
-                className="w-full p-2 rounded border bg-background"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
-              <textarea 
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                placeholder="Describe what you want to track to help the semantic search. e.g. Generative AI for protein design, diffusion models, structure prediction."
-                className="w-full p-2 rounded border bg-background min-h-[100px]"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Keywords (Optional)</label>
-              <input 
-                type="text" 
-                value={keywords}
-                onChange={e => setKeywords(e.target.value)}
-                placeholder="Comma separated keywords, e.g. CRISPR, Cas9, Gene Editing"
-                className="w-full p-2 rounded border bg-background"
-              />
-            </div>
+            <TopicForm draft={draft} onChange={setDraft} />
             <button 
               type="submit" 
               disabled={isCreating}
               className="bg-primary text-primary-foreground px-4 py-2 rounded font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
-              {isCreating ? 'Adding Topic (Generating Embedding)...' : 'Add Topic'}
+              {isCreating ? 'Adding Topic...' : 'Add Topic'}
             </button>
           </form>
         </div>

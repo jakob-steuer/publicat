@@ -34,6 +34,8 @@ export interface Item {
   /** The topic a vote on this card is attributed to. */
   topic_id?: string | null;
   topic_name?: string | null;
+  /** Human-readable explanation of the score, strongest factor first. */
+  reasons?: string[];
 }
 
 export type Vote = 2 | 1 | 0 | -1 | null
@@ -44,13 +46,50 @@ export interface VotePayload {
   topicId?: string | null;
 }
 
+export interface SeedPaper {
+  paperId: string;
+  title?: string;
+}
+
 export interface Topic {
   id: string;
   name: string;
   description: string;
-  keywords?: string;
+  keywords?: string | null;
+  exclude_keywords?: string | null;
+  seed_papers?: SeedPaper[] | null;
+  arxiv_categories?: string[] | null;
   priority?: number;
   is_active?: boolean;
+  has_prior_vector?: boolean;
+}
+
+export interface TopicDraft {
+  name: string;
+  description: string;
+  keywords: string;
+  exclude_keywords: string;
+  seed_papers: SeedPaper[];
+  arxiv_categories: string[];
+}
+
+export interface TopicModelStats {
+  topic_id: string;
+  trained: boolean;
+  n_pos: number;
+  n_neg: number;
+  cv_auc?: number | null;
+  trained_at?: string | null;
+  prior_source?: string | null;
+  extra?: { labels?: number; busy?: boolean };
+}
+
+export interface PaperSearchResult {
+  paperId: string;
+  title?: string;
+  year?: number;
+  venue?: string;
+  authors?: string[];
 }
 
 export interface Follow {

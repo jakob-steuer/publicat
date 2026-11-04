@@ -11,8 +11,18 @@ class Topic(Base):
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
     keywords = Column(String, nullable=True)
-    embedding = Column(JSON, nullable=True) # Storing as JSON list of floats
+    # Hard filter: papers mentioning any of these (comma separated) are dropped for this topic.
+    exclude_keywords = Column(String, nullable=True)
+    # Local SPECTER2 embedding of the description (legacy; only a fallback now).
+    embedding = Column(JSON, nullable=True)
+    # Topic vector in Semantic Scholar's specter_v2 space, built from seed papers,
+    # the user's positive votes, or S2 search results. This is what papers are compared to.
+    prior_vector = Column(JSON, nullable=True)
+    # [{"paperId": "...", "title": "..."}] papers the user picked as examples of the topic.
+    seed_papers = Column(JSON, nullable=True)
+    # arXiv OAI sets to harvest for this topic, e.g. ["q-bio", "cs"].
+    arxiv_categories = Column(JSON, nullable=True)
     priority = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
-    
+
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.datetime.now(datetime.timezone.utc))

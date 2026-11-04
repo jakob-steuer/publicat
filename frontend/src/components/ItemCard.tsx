@@ -40,6 +40,7 @@ export function ItemCard({
   showTopic = false
 }: ItemCardProps) {
   const [expandedAuthors, setExpandedAuthors] = useState(false)
+  const [showReasons, setShowReasons] = useState(false)
   const serverVote = item.user_vote as Vote | undefined
   const [localVote, setLocalVote] = useState<Vote | undefined>(serverVote)
   // Re-sync the optimistic vote when the server value changes (bulk actions, refetch).
@@ -59,18 +60,33 @@ export function ItemCard({
 
   return (
     <div key={item.id} className="relative flex flex-col justify-between bg-card rounded-md border-t-4 border-t-primary/80 border-x border-b shadow-sm hover:shadow-md transition-shadow p-5 pt-6 group mt-4">
-      {/* Top left score */}
+      {/* Top left score: click for the explanation */}
       {item.score !== undefined && item.score !== null && (
-        <div 
-          className={`absolute -top-2 -left-2 w-8 h-8 rounded-full border flex items-center justify-center font-bold text-[10px] shadow-sm
-            ${item.score >= 0.9 ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
-              item.score >= 0.75 ? 'bg-green-100 text-green-700 border-green-200' : 
-              item.score >= 0.6 ? 'bg-yellow-100 text-yellow-700 border-yellow-200' : 
-              item.score >= 0.4 ? 'bg-orange-100 text-orange-700 border-orange-200' :
-              'bg-red-100 text-red-700 border-red-200'}`}
-          title={`Relevance: ${(item.score * 100).toFixed(0)}%`}
-        >
-          {(item.score * 100).toFixed(0)}
+        <div className="absolute -top-2 -left-2">
+          <button
+            type="button"
+            onClick={() => setShowReasons(v => !v)}
+            className={`w-8 h-8 rounded-full border flex items-center justify-center font-bold text-[10px] shadow-sm cursor-pointer
+              ${item.score >= 0.9 ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
+                item.score >= 0.75 ? 'bg-green-100 text-green-700 border-green-200' :
+                item.score >= 0.6 ? 'bg-yellow-100 text-yellow-700 border-yellow-200' :
+                item.score >= 0.4 ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                'bg-red-100 text-red-700 border-red-200'}`}
+            title={item.reasons?.length ? 'Why this score?' : `Relevance: ${(item.score * 100).toFixed(0)}%`}
+          >
+            {(Math.min(item.score, 1) * 100).toFixed(0)}
+          </button>
+          {showReasons && item.reasons && item.reasons.length > 0 && (
+            <div className="absolute left-0 top-9 z-30 w-72 bg-white dark:bg-zinc-900 border border-border rounded-md shadow-xl p-3 text-xs space-y-1" onMouseLeave={() => setShowReasons(false)}>
+              <div className="font-semibold text-foreground mb-1">{item.reasons[0]}</div>
+              {item.reasons.slice(1).map((r, i) => (
+                <div key={i} className={`flex justify-between gap-2 ${r.includes('(-') ? 'text-red-600 dark:text-red-400' : 'text-foreground/80'}`}>
+                  <span>{r.replace(/\s*\([+-][\d.]+\)$/, '')}</span>
+                  <span className="font-mono shrink-0">{r.match(/\(([+-][\d.]+)\)$/)?.[1] ?? ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -18,7 +18,7 @@ router = APIRouter()
 SECTION_LIMIT = 50
 
 
-def _best_topic_lookup(db: Session, item_ids: list[str]) -> dict[str, tuple[str, str]]:
+def _best_topic_lookup(db: Session, item_ids: list[str]) -> dict[str, tuple[str, str, list]]:
     """For the overview feed: which topic gave each item its (highest) score.
 
     The UI attributes votes made on the overview to that topic only, so feedback
@@ -27,16 +27,16 @@ def _best_topic_lookup(db: Session, item_ids: list[str]) -> dict[str, tuple[str,
     if not item_ids:
         return {}
     rows = (
-        db.query(ItemScore.item_id, ItemScore.topic_id, ItemScore.final_score, Topic.name)
+        db.query(ItemScore.item_id, ItemScore.topic_id, ItemScore.final_score, Topic.name, ItemScore.reasons)
         .join(Topic, Topic.id == ItemScore.topic_id)
         .filter(ItemScore.item_id.in_(item_ids))
         .all()
     )
-    best: dict[str, tuple[float, str, str]] = {}
-    for item_id, topic_id, score, name in rows:
+    best: dict[str, tuple[float, str, str, list]] = {}
+    for item_id, topic_id, score, name, reasons in rows:
         if item_id not in best or (score or 0.0) > best[item_id][0]:
-            best[item_id] = (score or 0.0, topic_id, name)
-    return {k: (v[1], v[2]) for k, v in best.items()}
+            best[item_id] = (score or 0.0, topic_id, name, reasons or [])
+    return {k: (v[1], v[2], v[3]) for k, v in best.items()}
 
 
 @router.get("/", response_model=Dict[str, Any])
@@ -54,7 +54,7 @@ def get_dashboard(
         topic = db.query(Topic).filter(Topic.id == topic_id).first()
         topic_name = topic.name if topic else None
         base_query = (
-            db.query(Item, ItemScore.final_score, ItemScore.user_vote)
+            db.query(Item, ItemScore.final_score, ItemScore.user_vote, ItemScore.reasons)
             .join(ItemScore, Item.id == ItemScore.item_id)
             .filter(ItemScore.topic_id == topic_id, ItemScore.final_score >= min_score)
         )
@@ -139,9 +139,9 @@ def get_dashboard(
     def serialize(row):
         item, score, vote = row[0], row[1], row[2]
         if topic_id:
-            tid, tname = topic_id, topic_name
+            tid, tname, reasons = topic_id, topic_name, row[3]
         else:
-            tid, tname = best_topic.get(item.id, (None, None))
-        return item_to_dict(item, score, vote, tid, tname)
+            tid, tname, reasons = best_topic.get(item.id, (None, None, None))
+        return item_to_dict(item, score, vote, tid, tname, reasons)
 
     return {name: [serialize(r) for r in rows] for name, rows in raw_sections.items()}

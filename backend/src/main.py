@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import sys
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -11,9 +12,16 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api import dashboard, export, follows, items, rss, settings, topics
-from src.database import SessionLocal
+from src.database import SessionLocal, engine
+from src.db_migrate import upgrade
 
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+
+# Background jobs report through print(); keep that visible when stdout is a pipe (launcher, logs).
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 scheduler = AsyncIOScheduler()
 
@@ -27,13 +35,38 @@ async def scheduled_fetch():
         db.close()
 
 
+async def bootstrap_models() -> None:
+    """First start after the ranking upgrade: give every topic an S2-space vector and a trained model."""
+    from src.models.topic import Topic
+    from src.ranking.training import ensure_models
+
+    db = SessionLocal()
+    try:
+        topics_needing_vector = [t.id for t in db.query(Topic).filter(Topic.is_active == True, Topic.prior_vector.is_(None)).all()]  # noqa: E712
+        topics_needing_model = ensure_models(db)
+    finally:
+        db.close()
+    for topic_id in dict.fromkeys(topics_needing_vector + topics_needing_model):
+        # existing score rows only: fast, and it does not resurrect previously filtered noise
+        await topics.prepare_topic(topic_id, rescore_all=False)
+
+
+async def startup_tasks():
+    await bootstrap_models()
+    if os.environ.get("PUBLICAT_FETCH_ON_START", "1") not in ("0", "false", "False"):
+        await scheduled_fetch()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    applied = upgrade(engine)
+    if applied:
+        print(f"Database schema upgraded: {applied}")
     scheduler.add_job(scheduled_fetch, trigger=IntervalTrigger(hours=24), id="scheduled_fetch_job", replace_existing=True)
     scheduler.start()
-    # PUBLICAT_FETCH_ON_START=0 skips the launch-time sync (tests, smoke runs).
-    if os.environ.get("PUBLICAT_FETCH_ON_START", "1") not in ("0", "false", "False"):
-        asyncio.create_task(scheduled_fetch())
+    # PUBLICAT_BOOTSTRAP=0 skips model bootstrap + launch sync (tests, smoke runs).
+    if os.environ.get("PUBLICAT_BOOTSTRAP", "1") not in ("0", "false", "False"):
+        asyncio.create_task(startup_tasks())
     yield
     scheduler.shutdown()
 

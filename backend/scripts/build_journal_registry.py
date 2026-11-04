@@ -2,8 +2,6 @@ import sys
 import os
 import json
 import urllib.request
-from typing import List, Dict
-import numpy as np
 
 # Add backend to path so we can import embeddings
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))

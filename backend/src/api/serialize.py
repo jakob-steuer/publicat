@@ -16,6 +16,7 @@ def item_to_dict(
     user_vote: Optional[int] = None,
     topic_id: Optional[str] = None,
     topic_name: Optional[str] = None,
+    reasons: Optional[list] = None,
 ) -> dict[str, Any]:
     d = {k: v for k, v in item.__dict__.items() if k not in HEAVY_FIELDS}
     if score is not None:
@@ -26,4 +27,6 @@ def item_to_dict(
         d["topic_id"] = topic_id
     if topic_name is not None:
         d["topic_name"] = topic_name
+    if reasons is not None:
+        d["reasons"] = reasons
     return d
