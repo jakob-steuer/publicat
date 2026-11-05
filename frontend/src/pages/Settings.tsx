@@ -5,6 +5,7 @@ import React, { useState } from 'react'
 import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats, SyncRun } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
 import { TopicForm } from '../components/TopicForm'
+import { ZoteroImport } from '../components/ZoteroImport'
 import { emptyDraft, payloadFromDraft } from '../lib/topicDraft'
 import { useToast } from '../hooks/useToast'
 import { api } from '../lib/client'
@@ -40,6 +41,8 @@ export default function Settings() {
   const { toast } = useToast()
   const { data: zotero } = useQuery({ queryKey: ['zoteroStatus'], queryFn: api.zoteroStatus, refetchInterval: 20000, retry: false })
   const [zoteroAuto, setZoteroAuto] = useState(false)
+  const [zoteroUserId, setZoteroUserId] = useState('')
+  const [zoteroKey, setZoteroKey] = useState('')
   const { data: leaks } = useQuery({ queryKey: ['voteLeaks'], queryFn: api.voteLeaks })
   const { data: syncRuns } = useQuery<SyncRun[]>({ queryKey: ['syncRuns'], queryFn: () => api.syncRuns(8), refetchInterval: 30000 })
   const repairVotes = useMutation({
@@ -109,6 +112,8 @@ export default function Settings() {
       setBudget(config.anthropic_budget_limit?.toString() || '5.0')
       setRerankingMode(config.reranking_mode || 'llm')
       setZoteroAuto(!!config.zotero_auto_push)
+      setZoteroUserId(config.zotero_user_id || '')
+      setZoteroKey(config.zotero_api_key || '')
     }
   }, [config])
 
@@ -252,6 +257,8 @@ export default function Settings() {
       anthropic_budget_limit: parseFloat(budget),
       reranking_mode: rerankingMode,
       zotero_auto_push: zoteroAuto,
+      zotero_user_id: zoteroUserId,
+      zotero_api_key: zoteroKey,
     })
   }
 
@@ -320,6 +327,7 @@ export default function Settings() {
 
         <div className="pt-4 border-t">
           <h3 className="font-semibold mb-4">Add New Topic</h3>
+          <div className="mb-4"><ZoteroImport onDraft={setDraft} /></div>
           <form onSubmit={handleCreateTopic} className="space-y-4">
             <TopicForm draft={draft} onChange={setDraft} />
             <button 
@@ -588,7 +596,17 @@ export default function Settings() {
           <input type="checkbox" checked={zoteroAuto} onChange={e => setZoteroAuto(e.target.checked)} className="accent-primary" />
           Automatically save every starred paper to Zotero
         </label>
-        <p className="text-xs text-muted-foreground mt-2">Saved together with the API keys below. The RSS feed (button in the inbox header) keeps working as a fallback for machines without Zotero.</p>
+        <div className="grid sm:grid-cols-2 gap-3 mt-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Zotero user ID <span className="text-muted-foreground font-normal">(optional)</span></label>
+            <input type="text" value={zoteroUserId} onChange={e => setZoteroUserId(e.target.value)} placeholder="e.g. 1234567" className="w-full p-2 rounded border bg-background" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Zotero API key <span className="text-muted-foreground font-normal">(read-only is enough)</span></label>
+            <input type="password" value={zoteroKey} onChange={e => setZoteroKey(e.target.value)} placeholder="from zotero.org/settings/keys" className="w-full p-2 rounded border bg-background" />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">User ID and key are only needed to read your library for topic import when the desktop app is not running on this machine. Saved together with the API keys below. The RSS feed (button in the inbox header) keeps working as a fallback.</p>
       </div>
 
       <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">

@@ -8,7 +8,7 @@ export function useSyncProgress() {
     queryFn: api.progress,
     refetchInterval: q => {
       const s = q.state.data?.status
-      return s === 'running' || s === 'paused' ? 1500 : 30_000
+      return s === 'running' || s === 'paused' || s === 'aborted' ? 1500 : 5000
     },
   })
 }

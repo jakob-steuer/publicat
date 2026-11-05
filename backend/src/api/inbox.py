@@ -88,6 +88,7 @@ def get_inbox(
     sort: str = "score",  # score | date
     limit: int = 50,
     offset: int = 0,
+    wildcards: int = 0,
     db: Session = Depends(get_db),
 ):
     limit = max(1, min(limit, MAX_LIMIT))
@@ -163,7 +164,60 @@ def get_inbox(
             b = best_rows.get(item.id, {})
             items.append(item_to_dict(item, score, b.get("vote"), b.get("topic_id"), b.get("topic_name"), b.get("reasons")))
 
+    # ---- Wildcards: a few papers from just below the threshold, against the filter bubble ----
+    # The ranker only ever learns from what it chose to show. Showing a handful it would
+    # have hidden lets votes correct it when interests drift, and measures what is missed.
+    if wildcards > 0 and offset == 0 and filter == "all" and not (q and q.strip()) and not author_id and min_score > WILDCARD_FLOOR:
+        shown = {i["id"] for i in items}
+        picks = _wildcards(db, topic_id, min_score, days, show_preprints, now, min(wildcards, 10), shown)
+        if topic_id:
+            topic = db.get(Topic, topic_id)
+            for item, score, s in picks:
+                d = item_to_dict(item, score, s.user_vote if s else None, topic_id, topic.name if topic else None, s.reasons if s else None)
+                d["wildcard"] = True
+                items.append(d)
+        else:
+            best_rows = _best_rows(db, [p[0].id for p in picks])
+            for item, score, _s in picks:
+                b = best_rows.get(item.id, {})
+                d = item_to_dict(item, score, b.get("vote"), b.get("topic_id"), b.get("topic_name"), b.get("reasons"))
+                d["wildcard"] = True
+                items.append(d)
+
     return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+WILDCARD_FLOOR = 0.2  # never surface papers the ranker considers plain noise
+WILDCARD_BAND = 0.3  # how far below the threshold wildcards are drawn from
+
+
+def _wildcards(db: Session, topic_id: Optional[str], min_score: float, days: int, show_preprints: bool, now, n: int, exclude: set):
+    """Unread papers scoring in [min_score - band, min_score), a stable daily sample.
+
+    The sample is keyed on the date, so the same wildcards are shown all day
+    instead of changing on every refresh.
+    """
+    import hashlib
+
+    low = max(WILDCARD_FLOOR, min_score - WILDCARD_BAND)
+    q = db.query(Item, ItemScore).join(ItemScore, ItemScore.item_id == Item.id).join(Topic, Topic.id == ItemScore.topic_id)
+    q = q.filter(ItemScore.final_score >= low, ItemScore.final_score < min_score, Item.is_acknowledged == False, Item.is_hidden == False)  # noqa: E712
+    if topic_id:
+        q = q.filter(ItemScore.topic_id == topic_id)
+    if days > 0:
+        q = q.filter(Item.published_at >= now - datetime.timedelta(days=days))
+    if not show_preprints:
+        q = q.filter(~preprint_clause())
+    best: dict[str, tuple] = {}
+    for item, s in q.limit(2000).all():
+        if item.id in exclude:
+            continue
+        cur = best.get(item.id)
+        if cur is None or (s.final_score or 0) > (cur[1] or 0):
+            best[item.id] = (item, s.final_score, s)
+    day = now.strftime("%Y-%m-%d")
+    ranked = sorted(best.values(), key=lambda t: hashlib.sha1(f"{day}:{t[0].id}".encode()).hexdigest())
+    return ranked[:n]
 
 
 @router.get("/counts", response_model=Dict[str, Any])

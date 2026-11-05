@@ -114,3 +114,24 @@ def test_preprint_venue_recovered_from_ids():
     assert preprint_venue({"DOI": "10.1101/2026.11.01.123456"}) == "bioRxiv"
     assert preprint_venue({"DOI": "10.1101/2026.11.01.123456medrxiv"}) == "medRxiv"
     assert preprint_venue({"DOI": "10.1038/s41586-026-00001-1"}) is None
+
+
+def test_wildcards_come_from_just_below_the_threshold(client, db):
+    topic = _topic(db, "A", 1)
+    above = _item(db, "above", days_old=2)
+    near = [_item(db, f"near {i}", days_old=2) for i in range(6)]
+    noise = _item(db, "noise", days_old=2)
+    db.add(ItemScore(item_id=above.id, topic_id=topic.id, final_score=0.8, semantic_score=0.8))
+    for it in near:
+        db.add(ItemScore(item_id=it.id, topic_id=topic.id, final_score=0.4, semantic_score=0.4))
+    db.add(ItemScore(item_id=noise.id, topic_id=topic.id, final_score=0.1, semantic_score=0.1))
+    db.commit()
+
+    plain = client.get("/inbox/", params={"min_score": 0.5}).json()
+    assert [i["title"] for i in plain["items"]] == ["above"]
+    r = client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3}).json()
+    wild = [i for i in r["items"] if i.get("wildcard")]
+    assert r["total"] == 1 and len(wild) == 3 and all(i["title"].startswith("near") for i in wild)
+    again = client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3}).json()
+    assert [i["id"] for i in again["items"]] == [i["id"] for i in r["items"]]  # stable within the day
+    assert not any(i.get("wildcard") for i in client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3, "q": "above"}).json()["items"])

@@ -7,7 +7,7 @@ import { useSyncProgress } from '../../hooks/useSyncProgress'
 export function SyncBar() {
   const qc = useQueryClient()
   const { data } = useSyncProgress()
-  if (!data || (data.status !== 'running' && data.status !== 'paused')) return null
+  if (!data || (data.status !== 'running' && data.status !== 'paused' && data.status !== 'aborted')) return null
   const control = async (action: 'pause' | 'resume' | 'abort') => {
     await api.syncControl(action)
     qc.invalidateQueries({ queryKey: ['syncProgress'] })
@@ -15,7 +15,7 @@ export function SyncBar() {
   return (
     <div className="px-3 py-2 border-b border-border/60 bg-muted/30 text-xs">
       <div className="flex items-center gap-3">
-        <span className="flex-1 truncate">{data.message}</span>
+        <span className="flex-1 truncate">{data.job ? <span className="font-semibold">{data.job}: </span> : null}{data.status === 'aborted' ? 'Stopping… (finishes the current request first)' : data.message}</span>
         <span className="font-bold tabular-nums">{data.progress}%</span>
         {data.status === 'running' ? (
           <button onClick={() => control('pause')} className="text-amber-600 hover:text-amber-700" title="Pause"><Pause size={13} /></button>

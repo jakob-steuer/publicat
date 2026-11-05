@@ -6,6 +6,8 @@
 
 ---
 
+> **Fewer papers, not a better-sorted pile.** Publicat's job is to hand you the handful of new papers you should not miss, and to earn your confidence that the rest can be skipped.
+
 **PUBLICAT** is a highly-personalized, efficient triage system for managing daily scientific literature. 
 Instead of manually sifting through hundreds of noisy arXiv preprints or generic keyword alerts, Publicat uses local vector embeddings and an explicit LLM judge to filter, score, and summarize the papers that match your specific research interests.
 
@@ -103,6 +105,15 @@ Publicat uses AI to semantically match papers to your topics. The better you des
 
 **How ranking works:** every topic has its own small ranker, a logistic-regression model over the paper's Semantic Scholar SPECTER2 embedding plus a few readable features (keyword hits, followed authors, journal tier, preprint, LLM judge). Before you vote, it ranks by similarity to the topic vector, which is built from your **seed papers** (or, lacking those, from Semantic Scholar search results for the topic). Every Star (⭐), Upvote (👍), Neutral (➖) or Downvote (👎) retrains that topic's model within seconds and rescores its papers, so feedback is visible on the next feed load. Votes are attributed to exactly one topic, so topics never learn from each other's feedback. Click the score bubble on any card to see why it scored the way it did; the Settings page shows each ranker's vote counts and cross-validated accuracy. `Exclude keywords` are a hard filter.
 
+### Head start from Zotero
+In the topic form, **Start from a Zotero collection** lists your collections. Pick one and its papers become the topic's seed papers, with a suggested name and keywords that you can edit before creating the topic. One collection per research interest keeps the topics, and what they learn from your votes, separate. Needs the Zotero 7 desktop app with *Settings → Advanced → "Allow other applications on this computer to communicate with Zotero"*, or a Zotero user ID and read-only API key in Settings.
+
+### Trying Publicat from scratch
+A separate data directory is a separate, empty profile. Your real data is not touched:
+```bash
+PUBLICAT_DATA_DIR=~/publicat-fresh PUBLICAT_PORT=8002 ./start.sh
+```
+
 ### Example LLM Prompt to Generate a Great Topic
 If you're unsure how to describe your topic, ask an LLM of your choice:
 > *"I want to create a feed for academic papers about [Your Topic]. Write a 2-3 sentence description focusing strictly on the methodology and core technologies involved, avoiding generic outcomes. Then provide a comma-separated list of 3-5 hyper-specific keywords."*
@@ -122,10 +133,11 @@ The inbox is one ranked list per scope (all topics, one topic, or one author), w
 
 - ⭐ **Star (+2):** Save this paper. It will be permanently kept in your "Starred" feed for future reference, exported to your Zotero RSS feed, and heavily boosts similar papers in your future feed.
 - 👍 **Upvote (+1):** Relevant paper, but you don't need to save it permanently. Boosts similar papers.
-- ➖ **Neutral (0):** Mark as read. Neither boosts nor penalizes similar papers.
+- ➖ **Neutral (0):** Clear it from the inbox. A slight "not for me" signal (a quarter of an upvote), so it is safe for papers you cannot judge yet.
 - 👎 **Downvote / Discard (-1):** Not relevant. Hides the paper entirely and penalizes similar papers in the future.
 
 ### Features at a Glance
+- **Daily wildcards:** three papers a day from just below your relevance threshold, marked as such. Your votes on them tell the ranker whether it was right to hide papers like that, which keeps it from narrowing into a filter bubble. Switch off in the sidebar.
 - **Interruption-safe syncing:** every fetch looks back to the last *complete* sync (at least 3, at most 30 days), so a laptop that was closed for a week catches up. Writes are transactional; a run that lost requests is marked *partial* in Settings → Recent syncs and its period is fetched again next time. Only one sync runs at a time.
 - **Automatic Cleanup:** To prevent database bloat, any publication older than 60 days that you haven't explicitly starred is automatically removed. Starred papers are kept forever!
 - **Follow Authors:** Click the `+` icon next to an author's name on any paper. Every future paper they publish will automatically receive a score boost (+15%) and be highlighted in your feed!

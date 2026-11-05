@@ -18,6 +18,7 @@ export function TopicForm({ draft, onChange }: TopicFormProps) {
   const [seedQuery, setSeedQuery] = useState('')
   const [seedResults, setSeedResults] = useState<PaperSearchResult[]>([])
   const [searching, setSearching] = useState(false)
+  const [showAllSeeds, setShowAllSeeds] = useState(false)
 
   useEffect(() => {
     if (seedQuery.trim().length < 3) return
@@ -72,12 +73,19 @@ export function TopicForm({ draft, onChange }: TopicFormProps) {
         <p className="text-xs text-muted-foreground mb-2">Pick 3 to 10 papers that are exactly what you want to see. New papers are compared to them; this works better than any description.</p>
         {draft.seed_papers.length > 0 && (
           <ul className="space-y-1 mb-2">
-            {draft.seed_papers.map(s => (
+            {(showAllSeeds ? draft.seed_papers : draft.seed_papers.slice(0, 6)).map(s => (
               <li key={s.paperId} className="flex items-start gap-2 text-sm bg-muted/40 border border-border/50 rounded px-2 py-1">
                 <span className="flex-1 leading-snug">{s.title || s.paperId}</span>
                 <button type="button" onClick={() => set({ seed_papers: draft.seed_papers.filter(x => x.paperId !== s.paperId) })} className="text-muted-foreground hover:text-destructive" title="Remove seed paper">×</button>
               </li>
             ))}
+            {draft.seed_papers.length > 6 && (
+              <li>
+                <button type="button" onClick={() => setShowAllSeeds(v => !v)} className="text-xs text-primary hover:underline">
+                  {showAllSeeds ? 'Show fewer' : `Show all ${draft.seed_papers.length} seed papers`}
+                </button>
+              </li>
+            )}
           </ul>
         )}
         <div className="relative">

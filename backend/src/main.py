@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from src.api import dashboard, export, follows, inbox, items, rss, settings, topics
+from src.api import dashboard, export, follows, inbox, items, rss, settings, topics, zotero_import
 from src.database import SessionLocal, engine
 from src.db_migrate import upgrade
 
@@ -90,6 +90,7 @@ app.include_router(settings.router)
 app.include_router(follows.router, prefix="/follows", tags=["Follows"])
 app.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 app.include_router(inbox.router, prefix="/inbox", tags=["Inbox"])
+app.include_router(zotero_import.router, prefix="/zotero", tags=["Zotero library"])
 app.include_router(rss.router, prefix="/rss", tags=["RSS"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 
@@ -102,7 +103,7 @@ if os.path.exists(frontend_dist):
     async def serve_frontend(full_path: str, request: Request):
         # Unknown API paths stay 404 for API clients; a browser asking for HTML
         # always gets the app, so deep links such as /settings work.
-        api_prefixes = ("items/", "topics/", "settings/", "follows/", "dashboard/", "inbox/", "rss/", "api/")
+        api_prefixes = ("items/", "topics/", "settings/", "follows/", "dashboard/", "inbox/", "zotero/", "rss/", "api/")
         wants_html = "text/html" in request.headers.get("accept", "")
         if not wants_html and full_path.startswith(api_prefixes):
             raise HTTPException(status_code=404, detail="Not Found")

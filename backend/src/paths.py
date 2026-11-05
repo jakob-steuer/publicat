@@ -73,8 +73,14 @@ def migrate_legacy_database(target: Path | None = None, legacy: Path | None = No
 
 
 def default_database_url() -> str:
-    """sqlite URL for the data-directory database, migrating the legacy file if needed."""
+    """sqlite URL for the data-directory database, migrating the legacy file if needed.
+
+    The legacy in-repo database is only adopted into the *default* data
+    directory. An explicit PUBLICAT_DATA_DIR is a separate profile and starts
+    empty, which is how to try Publicat from scratch without touching real data.
+    """
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    migrate_legacy_database(path)
+    if not os.environ.get("PUBLICAT_DATA_DIR"):
+        migrate_legacy_database(path)
     return f"sqlite:///{path}"

@@ -23,7 +23,10 @@ from src.ranking.model import RankerModel, cross_validated_auc
 from src.ranking.paper import Follows, Paper, load_follows
 from src.ranking.scoring import apply_to_entry, score_against_topic
 
-VOTE_WEIGHTS = {2: 2.0, 1: 1.0, 0: 1.0, -1: 2.0}
+# Star and downvote are deliberate judgements; an upvote is the unit. A neutral vote
+# ("mark read", often used to clear papers that are hard to judge) is only a slight
+# "not for me" signal: a quarter of an upvote.
+VOTE_WEIGHTS = {2: 2.0, 1: 1.0, 0: 0.25, -1: 2.0}
 VOTE_HALF_LIFE_DAYS = 365.0  # older feedback counts less so interests can drift
 
 _locks: dict[str, threading.Lock] = {}

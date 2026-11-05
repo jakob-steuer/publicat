@@ -16,6 +16,9 @@ import type {
   Topic,
   TopicModelStats,
   Vote,
+  ZoteroCollection,
+  ZoteroLibraryStatus,
+  ZoteroPreview,
 } from '../types'
 import type { TopicDraft } from '../types'
 import { payloadFromDraft } from './topicDraft'
@@ -76,6 +79,10 @@ export const api = {
     window.URL.revokeObjectURL(url)
   },
   zoteroStatus: () => get<{ running: boolean }>('/api/export/zotero/status'),
+  zoteroLibraryStatus: () => get<ZoteroLibraryStatus>('/zotero/status'),
+  zoteroCollections: () => get<ZoteroCollection[]>('/zotero/collections'),
+  zoteroPreview: (collectionKey: string | null, collectionName: string) =>
+    axios.post<ZoteroPreview>('/zotero/preview', { collection_key: collectionKey, collection_name: collectionName }).then(r => r.data),
   zoteroPush: (ids: string[]) => axios.post<{ saved: number }>('/api/export/zotero/push', { item_ids: ids }).then(r => r.data),
 }
 

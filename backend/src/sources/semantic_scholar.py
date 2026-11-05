@@ -136,11 +136,15 @@ async def discover_new_papers_s2(topics: List[Any], since: datetime, feedback: D
 
     async with httpx.AsyncClient() as client:
         for topic in topics:
+            if jobs.aborted():
+                break
             add(f"search[{topic.name[:24]}]", await search_papers_bulk_s2(client, _query_for_topic(topic), since))
             fb = feedback.get(topic.id) or {}
             if fb.get("positive"):
                 add(f"recommend[{topic.name[:24]}]", await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])))
         for author_id in author_ids or []:
+            if jobs.aborted():
+                break
             add(f"author[{author_id}]", await author_papers_s2(client, author_id))
     print(f"  discovery/S2 total unique: {len(discovered)}", flush=True)
     return list(discovered.values())
@@ -163,11 +167,25 @@ async def enrich_papers_s2(identifiers: List[str]) -> List[Dict[str, Any]]:
     chunk_size = 100  # the endpoint allows 500, smaller chunks keep responses manageable
     async with httpx.AsyncClient() as client:
         for i in range(0, len(identifiers), chunk_size):
+            if jobs.aborted():
+                break
+            jobs.set_progress(40 + int(15 * i / max(1, len(identifiers))), f"Enriching papers via Semantic Scholar ({i}/{len(identifiers)})...")
             chunk = identifiers[i : i + chunk_size]
             data = await _fetch_s2_with_retry(client, S2_BATCH_URL, method="POST", params={"fields": ENRICH_FIELDS}, json_data={"ids": chunk})
             if data:
                 enriched.extend(p for p in data if p)
     return enriched
+
+
+async def lookup_papers_s2(identifiers: List[str], fields: str = "paperId,title,year") -> List[Dict[str, Any] | None]:
+    """Resolve DOI:/ARXIV:/PMID: identifiers to papers; the result is aligned with the input (None = unknown)."""
+    out: List[Dict[str, Any] | None] = []
+    async with httpx.AsyncClient() as client:
+        for i in range(0, len(identifiers), 100):
+            chunk = identifiers[i : i + 100]
+            data = await _fetch_s2_with_retry(client, S2_BATCH_URL, method="POST", params={"fields": fields}, json_data={"ids": chunk})
+            out.extend(data if isinstance(data, list) and len(data) == len(chunk) else [None] * len(chunk))
+    return out
 
 
 async def search_authors_s2(query: str) -> List[Dict[str, Any]]:

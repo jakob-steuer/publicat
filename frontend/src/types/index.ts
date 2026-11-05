@@ -36,6 +36,8 @@ export interface Item {
   topic_name?: string | null;
   /** Human-readable explanation of the score, strongest factor first. */
   reasons?: string[];
+  /** Shown from just below the relevance threshold to counter the filter bubble. */
+  wildcard?: boolean;
 }
 
 export type Vote = 2 | 1 | 0 | -1 | null
@@ -92,6 +94,32 @@ export interface PaperSearchResult {
   authors?: string[];
 }
 
+export interface ZoteroCollection {
+  key: string;
+  name: string;
+  path: string;
+  parent: string | null;
+  num_items: number;
+}
+
+export interface ZoteroPreview {
+  name: string;
+  description: string;
+  suggested_keywords: string[];
+  seed_papers: SeedPaper[];
+  total_items: number;
+  matched: number;
+  unresolved_titles: string[];
+  unresolved_count: number;
+  source: string;
+}
+
+export interface ZoteroLibraryStatus {
+  available: boolean;
+  local: { reachable: boolean; message: string | null };
+  web: { reachable: boolean; message: string | null };
+}
+
 export interface Follow {
   id: string;
   entity_type: string;
@@ -104,6 +132,8 @@ export interface SyncProgress {
   status: string;
   message: string;
   progress: number;
+  job?: string | null;
+  errors?: number;
 }
 
 export interface Settings {
@@ -114,6 +144,8 @@ export interface Settings {
   enable_llm_reranking: boolean;
   reranking_mode: string;
   zotero_auto_push: boolean;
+  zotero_user_id?: string;
+  zotero_api_key?: string;
   llm_spend_this_month?: number;
   last_synced_at?: string;
   last_complete_sync_at?: string | null;
@@ -147,6 +179,7 @@ export interface InboxParams {
   sort?: InboxSort;
   limit?: number;
   offset?: number;
+  wildcards?: number;
 }
 
 export interface InboxPage {

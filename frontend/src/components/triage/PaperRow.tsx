@@ -50,6 +50,9 @@ function PaperRowInner({ item, focused, open, selected, showTopic, onFocus, onOp
           {item.venue && <span className="truncate max-w-[28ch]">· {item.venue}</span>}
           <span>· {formatDate(item.published_at)}</span>
           {item.is_open_access && item.open_access_pdf_url && <span className="inline-flex items-center gap-0.5 text-red-600/80"><FileText size={11} /> PDF</span>}
+          {item.wildcard && (
+            <span className="px-1.5 py-px rounded bg-violet-100 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-200 dark:border-violet-700" title="Below your relevance threshold. Shown on purpose: your vote tells the ranker whether it was right to hide papers like this.">Wildcard</span>
+          )}
           {showTopic && item.topic_name && (
             <span className="px-1.5 py-px rounded bg-primary/10 text-primary border border-primary/20 truncate max-w-[24ch]" title={`Votes train "${item.topic_name}"`}>{item.topic_name}</span>
           )}

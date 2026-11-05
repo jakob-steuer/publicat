@@ -7,6 +7,7 @@ import { usePrefs, type Prefs } from './hooks/usePrefs'
 import { ToastProvider } from './components/ui/Toast'
 import { useToast } from './hooks/useToast'
 import { useSyncProgress } from './hooks/useSyncProgress'
+import { SyncBar } from './components/triage/SyncBar'
 import Inbox from './pages/Inbox'
 import Library from './pages/Library'
 import Settings from './pages/Settings'
@@ -46,11 +47,18 @@ function Sidebar({ prefs, update, isMobileOpen, onClose }: { prefs: Prefs; updat
     return () => clearInterval(t)
   }, [])
   const busy = sync?.status === 'running' || sync?.status === 'paused'
+  const stopping = sync?.status === 'aborted'
 
   const startFetch = async () => {
     if (busy) return
-    await api.startFetch()
-    toast('Fetching new papers in the background', { kind: 'info' })
+    const { data } = await api.startFetch()
+    if (data?.status === 'error') {
+      toast(data.message ?? 'A job is already running', { kind: 'error' })
+    } else {
+      // show the bar immediately; the poll takes over from here
+      qc.setQueryData(['syncProgress'], { status: 'running', message: data?.message ?? 'Starting fetch…', progress: 0, job: 'manual fetch' })
+      toast(data?.message ?? 'Fetching new papers in the background', { kind: 'info' })
+    }
     qc.invalidateQueries({ queryKey: ['syncProgress'] })
   }
 
@@ -69,7 +77,7 @@ function Sidebar({ prefs, update, isMobileOpen, onClose }: { prefs: Prefs; updat
 
         <div className="px-4 mb-4">
           <button onClick={startFetch} disabled={busy} className="w-full bg-primary text-primary-foreground hover:bg-primary/90 h-9 rounded-md font-medium text-sm disabled:opacity-50 transition-transform active:scale-95">
-            {busy ? 'Syncing…' : 'Fetch latest papers'}
+            {busy ? 'Syncing…' : stopping ? 'Fetch (after current job stops)' : 'Fetch latest papers'}
           </button>
           <div className="text-[10px] text-center mt-1.5 text-muted-foreground">{settings?.last_synced_at ? `Last fetched ${timeAgo(settings.last_synced_at, now)}` : 'Never fetched'}</div>
         </div>
@@ -98,6 +106,7 @@ function Sidebar({ prefs, update, isMobileOpen, onClose }: { prefs: Prefs; updat
           <label className="flex items-center gap-2 text-sm px-1 cursor-pointer"><input type="checkbox" checked={prefs.showPreprints} onChange={e => update({ showPreprints: e.target.checked })} className="accent-primary" /> Show preprints</label>
           <label className="flex items-center gap-2 text-sm px-1 cursor-pointer"><input type="checkbox" checked={prefs.showRated} onChange={e => update({ showRated: e.target.checked })} className="accent-primary" /> Show rated papers</label>
           <label className="flex items-center gap-2 text-sm px-1 cursor-pointer"><input type="checkbox" checked={prefs.autoAdvance} onChange={e => update({ autoAdvance: e.target.checked })} className="accent-primary" /> Advance after voting</label>
+          <label className="flex items-center gap-2 text-sm px-1 cursor-pointer" title="Three papers a day from just below your threshold, so the ranker can be corrected when your interests shift"><input type="checkbox" checked={prefs.wildcards} onChange={e => update({ wildcards: e.target.checked })} className="accent-primary" /> Daily wildcards</label>
           <label className="flex items-center justify-between gap-2 text-sm px-1">
             <span>Look back</span>
             <select value={prefs.days} onChange={e => update({ days: parseInt(e.target.value, 10) })} className="bg-background border border-border rounded px-1 py-0.5 text-xs">
@@ -127,7 +136,9 @@ function Shell() {
         <span className="font-bold tracking-tight">PUBLICAT</span>
       </div>
       <Sidebar prefs={prefs} update={update} isMobileOpen={menuOpen} onClose={() => setMenuOpen(false)} />
-      <main className="flex-1 min-w-0 min-h-0 h-full overflow-hidden">
+      <main className="flex-1 min-w-0 min-h-0 h-full overflow-hidden flex flex-col">
+        <SyncBar />
+        <div className="flex-1 min-h-0">
         <Routes>
           <Route path="/" element={<Inbox prefs={prefs} updatePrefs={update} />} />
           <Route path="/topic/:topicId" element={<Inbox prefs={prefs} updatePrefs={update} />} />
@@ -138,6 +149,7 @@ function Shell() {
           <Route path="/disclaimer" element={<div className="h-full overflow-y-auto"><Disclaimer /></div>} />
           <Route path="/help" element={<div className="h-full overflow-y-auto"><Help /></div>} />
         </Routes>
+        </div>
       </main>
     </div>
   )

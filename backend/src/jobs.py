@@ -38,7 +38,21 @@ _lock = asyncio.Lock()
 
 
 def is_busy() -> bool:
-    return state["status"] in ("running", "paused")
+    """True while a job holds the slot, including one that is still winding down after an abort."""
+    return _lock.locked() or state["status"] in ("running", "paused")
+
+
+def is_stopping() -> bool:
+    return _lock.locked() and state["status"] == "aborted"
+
+
+async def wait_until_free(timeout: float = 180.0) -> bool:
+    """Wait for an aborted job to finish unwinding. True once the slot is free."""
+    waited = 0.0
+    while _lock.locked() and waited < timeout:
+        await asyncio.sleep(0.5)
+        waited += 0.5
+    return not _lock.locked()
 
 
 def set_progress(progress: int, message: str) -> None:

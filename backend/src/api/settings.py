@@ -8,7 +8,7 @@ from src.schemas.settings import SettingsUpdate, SettingsResponse
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-SECRET_KEYS = ("gemini_api_key", "anthropic_api_key", "s2_api_key")
+SECRET_KEYS = ("gemini_api_key", "anthropic_api_key", "s2_api_key", "zotero_api_key")
 MASK = "••••"
 
 
@@ -40,6 +40,8 @@ def get_settings(db: Session = Depends(get_db)):
         "enable_llm_reranking": get_config_value(db, "enable_llm_reranking", "true") == "true",
         "reranking_mode": get_config_value(db, "reranking_mode", "llm"),
         "zotero_auto_push": get_config_value(db, "zotero_auto_push", "false") == "true",
+        "zotero_user_id": get_config_value(db, "zotero_user_id", ""),
+        "zotero_api_key": mask_secret(get_config_value(db, "zotero_api_key", "")),
         "llm_spend_this_month": month_spend(db),
         "last_synced_at": get_config_value(db, "last_synced_at", None),
         "last_complete_sync_at": get_config_value(db, "last_complete_sync_at", None),
@@ -66,6 +68,8 @@ def update_settings(settings: SettingsUpdate, db: Session = Depends(get_db)):
         set_config("enable_llm_reranking", "true" if settings.enable_llm_reranking else "false")
     if settings.reranking_mode is not None:
         set_config("reranking_mode", settings.reranking_mode)
+    if settings.zotero_user_id is not None:
+        set_config("zotero_user_id", settings.zotero_user_id.strip())
     if settings.zotero_auto_push is not None:
         set_config("zotero_auto_push", "true" if settings.zotero_auto_push else "false")
 

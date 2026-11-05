@@ -7,7 +7,6 @@ import { absoluteApiUrl } from '../lib/api'
 import type { InboxFilter, InboxParams, Item, Topic } from '../types'
 import type { Prefs } from '../hooks/usePrefs'
 import { PaperList } from '../components/triage/PaperList'
-import { SyncBar } from '../components/triage/SyncBar'
 import { useToast } from '../hooks/useToast'
 import { Onboarding } from './Onboarding'
 
@@ -54,7 +53,8 @@ export default function Inbox({ prefs, updatePrefs }: Props) {
     filter,
     sort: prefs.sort,
     limit: PAGE,
-  }), [topicId, authorId, prefs.minScore, prefs.days, prefs.showRated, prefs.showPreprints, q, filter, prefs.sort])
+    wildcards: prefs.wildcards ? 3 : 0,
+  }), [topicId, authorId, prefs.minScore, prefs.days, prefs.showRated, prefs.showPreprints, q, filter, prefs.sort, prefs.wildcards])
 
   const query = useInfiniteQuery({
     queryKey: ['inbox', params],
@@ -78,7 +78,7 @@ export default function Inbox({ prefs, updatePrefs }: Props) {
   const authorName = authorId ? follows.find(f => f.entity_value === authorId)?.display_name ?? authorId.replace(/^(AUTHOR_ID|ORCID):/, '') : null
   const title = authorName ? `Papers by ${authorName}` : topic ? topic.name : 'All topics'
 
-  if (!topicsLoading && topics.length === 0) return <Onboarding />
+  if (!topicsLoading && topics.length === 0) return <div className="h-full overflow-y-auto"><Onboarding /></div>
 
   const copyZoteroRss = () => {
     const url = absoluteApiUrl(topicId ? `/api/export/zotero/rss?topic_id=${topicId}` : '/api/export/zotero/rss')
@@ -87,7 +87,6 @@ export default function Inbox({ prefs, updatePrefs }: Props) {
 
   const header = (
     <div className="border-b border-border bg-background/95 backdrop-blur sticky top-0 z-20">
-      <SyncBar />
       <div className="px-3 pt-3 pb-2 flex flex-wrap items-end gap-x-4 gap-y-2">
         <div className="min-w-0">
           <h1 className="text-xl font-bold tracking-tight truncate">{title}</h1>

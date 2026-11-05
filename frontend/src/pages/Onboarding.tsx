@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { api, errorMessage } from '../lib/client'
 import { TopicForm } from '../components/TopicForm'
+import { ZoteroImport } from '../components/ZoteroImport'
 import { emptyDraft } from '../lib/topicDraft'
 import { useToast } from '../hooks/useToast'
 import type { TopicDraft } from '../types'
@@ -47,7 +48,8 @@ export function Onboarding() {
 
       <section className="border rounded-xl p-5 bg-card">
         <h2 className="font-semibold mb-1">2. Your first topic</h2>
-        <p className="text-sm text-muted-foreground mb-4">Describe it, then add a few seed papers you consider perfect examples. The seed papers define what "relevant" means; your votes refine it from there.</p>
+        <p className="text-sm text-muted-foreground mb-4">Describe it, then add a few seed papers you consider perfect examples. The seed papers define what "relevant" means; your votes refine it from there. If you keep a Zotero library, start from one of its collections and adjust the draft.</p>
+        <div className="mb-4"><ZoteroImport onDraft={setDraft} /></div>
         <form className="space-y-4" onSubmit={e => { e.preventDefault(); if (draft.name && draft.description) createTopic.mutate() }}>
           <TopicForm draft={draft} onChange={setDraft} />
           <button type="submit" disabled={createTopic.isPending || !draft.name || !draft.description} className="px-4 py-2 rounded bg-primary text-primary-foreground font-medium disabled:opacity-50">

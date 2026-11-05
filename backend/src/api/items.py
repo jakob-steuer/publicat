@@ -181,6 +181,8 @@ async def run_ingestion(db: Session, days_back: int = 3):
     sync_state["message"] = "Checking followed authors on ORCID..."
     sync_state["progress"] = 20
     for orcid in orcids:
+        if jobs.aborted():
+            return
         dois = await orcid_recent_dois(orcid, since)
         print(f"  discovery/orcid[{orcid}]: {len(dois)} recent DOIs", flush=True)
         all_identifiers.update(f"DOI:{doi}" for doi in dois)
@@ -448,12 +450,18 @@ def sync_runs(limit: int = 10, db: Session = Depends(get_db)):
 @router.post("/fetch", response_model=dict)
 async def trigger_fetch(background_tasks: BackgroundTasks):
     """Manually trigger ingestion from all sources in the background."""
-    if jobs.is_busy():
+    stopping = jobs.is_stopping()
+    if jobs.is_busy() and not stopping:
         return {"status": "error", "message": f"{jobs.state.get('job') or 'A job'} is already running"}
 
     async def task():
         from src.database import SessionLocal
 
+        # The previous job was aborted but has not unwound yet (it stops at the
+        # next checkpoint): wait for the slot instead of silently dropping the request.
+        if not await jobs.wait_until_free():
+            print("Manual fetch dropped: previous job did not stop in time.", flush=True)
+            return
         db = SessionLocal()
         try:
             await full_sync(db, name="manual fetch")
@@ -461,7 +469,7 @@ async def trigger_fetch(background_tasks: BackgroundTasks):
             db.close()
 
     background_tasks.add_task(task)
-    return {"status": "success", "message": "Fetch started in background"}
+    return {"status": "success", "message": "Fetch queued: waiting for the previous job to stop" if stopping else "Fetch started in background"}
 
 
 @router.get("/progress", response_model=dict)

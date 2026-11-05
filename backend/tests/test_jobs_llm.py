@@ -154,3 +154,32 @@ def test_sync_run_is_logged_as_partial_when_requests_failed(client, db, monkeypa
     asyncio.run(items_api.full_sync(db, name="test sync 2"))
     assert client.get("/items/sync_runs").json()[0]["status"] == "complete"
     assert client.get("/settings/").json()["last_complete_sync_at"]
+
+
+def test_fetch_requested_while_previous_job_is_stopping_waits_for_the_slot():
+    async def scenario():
+        release = asyncio.Event()
+        started = asyncio.Event()
+
+        async def slow():
+            started.set()
+            await release.wait()
+
+        first = asyncio.create_task(jobs.run_exclusive("first", slow))
+        await started.wait()
+        jobs.control("abort")
+        assert jobs.is_busy() and jobs.is_stopping()  # aborted but still holding the slot
+        waiter = asyncio.create_task(jobs.wait_until_free(timeout=5))
+        await asyncio.sleep(0.05)
+        assert not waiter.done()
+        release.set()
+        await first
+        assert await waiter is True and not jobs.is_busy()
+
+    asyncio.run(scenario())
+
+
+def test_neutral_vote_is_only_a_slight_negative():
+    from src.ranking.training import VOTE_WEIGHTS
+
+    assert VOTE_WEIGHTS[0] <= 0.25 * VOTE_WEIGHTS[1] and VOTE_WEIGHTS[-1] >= 2 * VOTE_WEIGHTS[1]

@@ -33,7 +33,7 @@ export default function Help() {
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <div className="text-2xl mb-2 text-blue-500">➖</div>
               <h3 className="font-semibold mb-1">Neutral (0)</h3>
-              <p className="text-sm text-muted-foreground">Mark as read. No effect on future scoring.</p>
+              <p className="text-sm text-muted-foreground">Clear it from the inbox. Counts as a slight "not for me", a quarter of an upvote, so use it freely for papers you cannot judge yet.</p>
             </div>
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <div className="text-2xl mb-2 text-red-500">👎</div>

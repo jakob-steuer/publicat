@@ -10,6 +10,8 @@ export interface Prefs {
   days: number;
   dark: boolean;
   autoAdvance: boolean;
+  /** Show a few papers from just below the threshold each day. */
+  wildcards: boolean;
 }
 
 const KEY = 'publicat.prefs.v1'
@@ -22,6 +24,7 @@ const defaults: Prefs = {
   days: 56,
   dark: typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)').matches : false,
   autoAdvance: true,
+  wildcards: true,
 }
 
 function load(): Prefs {
