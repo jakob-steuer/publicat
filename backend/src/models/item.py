@@ -39,6 +39,9 @@ class Item(Base):
     t3_summary = Column(String, nullable=True)
     tools = Column(JSON, nullable=True)
     
+    # Which discovery lanes found this paper, e.g. ["arXiv", "S2 search"].
+    discovered_via = Column(JSON, nullable=True)
+
     is_acknowledged = Column(Boolean, nullable=False, default=False, index=True)
     is_starred = Column(Boolean, nullable=False, default=False, index=True)
     is_hidden = Column(Boolean, nullable=False, default=False)

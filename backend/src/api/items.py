@@ -175,8 +175,15 @@ async def run_ingestion(db: Session, days_back: int = 3):
     sync_state["message"] = "Discovering papers via Semantic Scholar (search, recommendations, authors)..."
     sync_state["progress"] = 10
     all_identifiers = set()
+    origins: dict[str, set] = {}  # identifier (lower-case) -> discovery lanes
+
+    def found(identifier: str, lane: str) -> None:
+        all_identifiers.add(identifier)
+        origins.setdefault(identifier.lower(), set()).add(lane)
+
     for p in await discover_new_papers_s2(active_topics, since, feedback=_topic_feedback(db, active_topics), author_ids=s2_author_ids):
-        all_identifiers.add(p["paperId"])
+        for lane in p.get("_via") or {"S2 search"}:
+            found(p["paperId"], lane)
 
     sync_state["message"] = "Checking followed authors on ORCID..."
     sync_state["progress"] = 20
@@ -184,17 +191,23 @@ async def run_ingestion(db: Session, days_back: int = 3):
         if jobs.aborted():
             return
         dois = await orcid_recent_dois(orcid, since)
+        jobs.count_source("followed author (ORCID)", len(dois), len(dois))
         print(f"  discovery/orcid[{orcid}]: {len(dois)} recent DOIs", flush=True)
-        all_identifiers.update(f"DOI:{doi}" for doi in dois)
+        for doi in dois:
+            found(f"DOI:{doi}", "followed author (ORCID)")
 
     sync_state["message"] = "Discovering preprints (arXiv, bioRxiv)..."
     sync_state["progress"] = 25
     arxiv_sets = sorted({c for t in active_topics for c in (t.arxiv_categories or [])}) or DEFAULT_ARXIV_SETS
     arxiv_ids = await harvest_arxiv_oai(arxiv_sets, since)
     biorxiv_ids = await harvest_biorxiv_api(since)
+    jobs.count_source("arXiv", len(arxiv_ids), len(arxiv_ids))
+    jobs.count_source("bioRxiv", len(biorxiv_ids), len(biorxiv_ids))
     print(f"  discovery/arxiv{arxiv_sets}: {len(arxiv_ids)}; discovery/biorxiv: {len(biorxiv_ids)}", flush=True)
-    all_identifiers.update(arxiv_ids)
-    all_identifiers.update(f"DOI:{bid}" for bid in biorxiv_ids)
+    for aid in arxiv_ids:
+        found(aid, "arXiv")
+    for bid in biorxiv_ids:
+        found(f"DOI:{bid}", "bioRxiv")
 
     if sync_state["status"] == "aborted":
         return
@@ -221,6 +234,17 @@ async def run_ingestion(db: Session, days_back: int = 3):
     enriched_all = await enrich_papers_s2(identifiers_list)
     enriched_papers = [p for p in enriched_all if _published_after(p, since - timedelta(days=7))]
     jobs.count("enriched", len(enriched_papers))
+    for paper in enriched_papers:
+        ext = paper.get("externalIds") or {}
+        keys = [str(paper.get("paperId") or "")]
+        if ext.get("ArXiv"):
+            keys.append(f"ARXIV:{ext['ArXiv']}")
+        if ext.get("DOI"):
+            keys.append(f"DOI:{ext['DOI']}")
+        via: set = set()
+        for k in keys:
+            via |= origins.get(k.lower(), set())
+        paper["_via"] = sorted(via)
     print(f"  enrichment: {len(enriched_all)} records from S2, {len(enriched_papers)} within the date window", flush=True)
 
     # 3. SCORING (CPU + DB work, in a worker thread so the API stays responsive) ----
@@ -242,6 +266,7 @@ def score_and_store(db: Session, enriched_papers: list, active_topics: list) -> 
     total = len(enriched_papers)
     stored = 0
     no_embedding = 0
+    stored_by_source: dict[str, int] = {}
     for idx, paper in enumerate(enriched_papers):
         if idx % 25 == 0:
             jobs.set_progress(60 + int((idx / max(1, total)) * 20), f"Scoring papers ({idx + 1}/{total})...")
@@ -283,6 +308,9 @@ def score_and_store(db: Session, enriched_papers: list, active_topics: list) -> 
             continue
 
         tldr_obj = paper.get("tldr")
+        via = paper.pop("_via", None) or None
+        for lane in via or ["unknown"]:
+            stored_by_source[lane] = stored_by_source.get(lane, 0) + 1
         db_item = Item(
             source="SemanticScholar",
             source_native_id=str(paper.get("paperId")),
@@ -306,6 +334,7 @@ def score_and_store(db: Session, enriched_papers: list, active_topics: list) -> 
             t1_tldr=tldr_obj.get("text") if tldr_obj else None,
             embedding=features.embedding,
             raw_metadata_json=paper,
+            discovered_via=via,
         )
         db.add(db_item)
         db.flush()
@@ -316,6 +345,7 @@ def score_and_store(db: Session, enriched_papers: list, active_topics: list) -> 
             db.commit()
 
     db.commit()
+    jobs.state["counters"]["stored_by_source"] = stored_by_source
     print(f"  scoring: {total} candidates scored, {stored} stored (>= {MIN_SCORE_TO_KEEP:.2f} relevance or keyword/author/journal signal), {no_embedding} skipped without embedding", flush=True)
     return stored
 
@@ -398,6 +428,12 @@ async def _sync_steps(db: Session, days_back: Optional[int], name: str) -> None:
             deleted = await asyncio.to_thread(cleanup_old_items, db)
             jobs.count("cleaned_up", deleted)
             print(f"Cleaned up {deleted} old unstarred, unvoted items.", flush=True)
+            # New papers change what "a typical paper" looks like: refresh every topic's
+            # calibration and scores now, not only after the next vote.
+            jobs.set_progress(85, "Updating topic rankers...")
+            for topic_id in [t.id for t in db.query(Topic).filter(Topic.is_active == True).all()]:  # noqa: E712
+                await asyncio.to_thread(retrain_and_rescore, topic_id)
+            db.expire_all()
             jobs.set_progress(90, "Running LLM summaries (this may take a while)...")
             await run_summarization_pipeline(db)
     except Exception as e:
@@ -411,7 +447,8 @@ async def _sync_steps(db: Session, days_back: Optional[int], name: str) -> None:
         run.counters = dict(jobs.state.get("counters", {}))
         run.finished_at = datetime.now(timezone.utc)
         if run.status == "partial":
-            run.message = f"{errors} request(s) failed; the period will be fetched again next time."
+            details = "; ".join(run.counters.get("error_messages", [])[:5])
+            run.message = f"{errors} request(s) failed; the period will be fetched again next time. {details}".strip()
         if run.status in ("complete", "partial"):
             _finish_sync(db, complete=run.status == "complete")
         db.commit()
@@ -423,8 +460,12 @@ async def full_sync(db: Session, days_back: Optional[int] = None, name: str = "s
     days_back=None derives the window from the last complete sync. Returns False
     if another job was already running (nothing was done).
     """
-    result = await jobs.run_exclusive(name, lambda: _sync_steps(db, days_back, name))
-    return result is not None or not jobs.is_busy()
+    ran = await jobs.run_exclusive(name, lambda: _sync_steps(db, days_back, name)) is not None or not jobs.is_busy()
+    # Topics created while this job ran asked for their history: fetch it now, once.
+    backfill = jobs.take_backfill()
+    if ran and backfill and not jobs.aborted():
+        await jobs.run_exclusive("backfill for new topics", lambda: _sync_steps(db, backfill, "backfill for new topics"))
+    return ran
 
 
 @router.get("/sync_runs", response_model=List[dict])
@@ -448,8 +489,13 @@ def sync_runs(limit: int = 10, db: Session = Depends(get_db)):
 
 
 @router.post("/fetch", response_model=dict)
-async def trigger_fetch(background_tasks: BackgroundTasks):
-    """Manually trigger ingestion from all sources in the background."""
+async def trigger_fetch(background_tasks: BackgroundTasks, days: Optional[int] = None):
+    """Manually trigger ingestion from all sources in the background.
+
+    `days` forces the lookback (e.g. 30 to backfill); default derives it from the last complete sync.
+    """
+    if days is not None:
+        days = max(1, min(int(days), 60))
     stopping = jobs.is_stopping()
     if jobs.is_busy() and not stopping:
         return {"status": "error", "message": f"{jobs.state.get('job') or 'A job'} is already running"}
@@ -464,7 +510,7 @@ async def trigger_fetch(background_tasks: BackgroundTasks):
             return
         db = SessionLocal()
         try:
-            await full_sync(db, name="manual fetch")
+            await full_sync(db, days_back=days, name="manual fetch" if days is None else f"backfill ({days} days)")
         finally:
             db.close()
 
@@ -511,7 +557,11 @@ def _library(db: Session, flag_column, default_vote: int) -> List[dict]:
             .first()
         )
         vote = score.user_vote if score and score.user_vote is not None else default_vote
-        results.append(item_to_dict(item, score.final_score if score else None, vote, score.topic_id if score else None, reasons=score.reasons if score else None))
+        topic = db.get(Topic, score.topic_id) if score else None
+        results.append(item_to_dict(item, score.final_score if score else None, vote, score.topic_id if score else None, topic.name if topic else None, reasons=score.reasons if score else None))
+    from src.api.inbox import attach_topic_votes
+
+    attach_topic_votes(db, results)
     return results
 
 
@@ -701,6 +751,57 @@ def vote_item(item_id: str, vote_req: VoteRequest, background_tasks: BackgroundT
         if auto and auto.value == "true":
             background_tasks.add_task(_zotero_push_quietly, item_id)
     return {"status": "success", "topic_id": target.topic_id if target else None}
+
+
+class TopicTagRequest(BaseModel):
+    state: str  # "in" | "out" | "none"
+
+
+@router.put("/{item_id}/topics/{topic_id}", response_model=dict)
+def tag_topic(item_id: str, topic_id: str, req: TopicTagRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Say whether a paper belongs to a topic, independently of where it was found.
+
+    "in"   the paper is a good example of this topic (a star if it is starred, else an upvote)
+    "out"  it does not belong to this topic (a downvote for this topic only; the paper stays visible elsewhere)
+    "none" no statement about this topic
+    Only the topic's training signal changes; the paper's own read/starred/discarded state is untouched.
+    """
+    item = db.get(Item, item_id)
+    topic = db.get(Topic, topic_id)
+    if not item or not topic:
+        return {"status": "error", "message": "Item or topic not found"}
+    if req.state not in ("in", "out", "none"):
+        return {"status": "error", "message": "state must be in, out or none"}
+
+    row = db.query(ItemScore).filter(ItemScore.item_id == item_id, ItemScore.topic_id == topic_id).first()
+    if row is None:
+        if req.state == "none":
+            return {"status": "success", "topic_votes": _topic_votes(db, item_id)}
+        row = ItemScore(item_id=item_id, topic_id=topic_id, semantic_score=0.0, final_score=0.0, reasons=[])
+        paper = Paper.from_item(item)
+        if paper.embedding is not None:
+            from src.ranking.scoring import apply_to_entry, score_against_topic
+
+            apply_to_entry(row, score_against_topic(paper, topic, load_models(db, [topic])[topic.id], load_follows(db)))
+        db.add(row)
+    if req.state == "in":
+        row.user_vote = 2 if item.is_starred else 1
+    elif req.state == "out":
+        row.user_vote = -1
+    else:
+        row.user_vote = None
+    row.voted_at = datetime.now(timezone.utc) if req.state != "none" else None
+    db.commit()
+    background_tasks.add_task(retrain_and_rescore, topic_id)
+    return {"status": "success", "topic_votes": _topic_votes(db, item_id)}
+
+
+def _topic_votes(db: Session, item_id: str) -> list:
+    from src.api.inbox import attach_topic_votes
+
+    holder = [{"id": item_id}]
+    attach_topic_votes(db, holder)
+    return holder[0]["topic_votes"]
 
 
 async def _zotero_push_quietly(item_id: str) -> None:

@@ -18,6 +18,7 @@ NEW_COLUMNS: list[tuple[str, str, str]] = [
     ("topics", "seed_papers", "JSON"),
     ("topics", "arxiv_categories", "JSON"),
     ("item_scores", "voted_at", "DATETIME"),
+    ("items", "discovered_via", "JSON"),
 ]
 
 

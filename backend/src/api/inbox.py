@@ -177,14 +177,33 @@ def get_inbox(
                 d["wildcard"] = True
                 items.append(d)
         else:
-            best_rows = _best_rows(db, [p[0].id for p in picks])
-            for item, score, _s in picks:
-                b = best_rows.get(item.id, {})
-                d = item_to_dict(item, score, b.get("vote"), b.get("topic_id"), b.get("topic_name"), b.get("reasons"))
+            names = {t.id: t.name for t in db.query(Topic).all()}
+            for item, score, row in picks:
+                d = item_to_dict(item, score, row.user_vote if row else None, row.topic_id if row else None, names.get(row.topic_id) if row else None, row.reasons if row else None)
                 d["wildcard"] = True
                 items.append(d)
 
+    attach_topic_votes(db, items)
     return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+def attach_topic_votes(db: Session, items: list[dict]) -> None:
+    """Add `topic_votes` to each serialised item: its score and vote in every topic it has a row for."""
+    ids = [i["id"] for i in items]
+    if not ids:
+        return
+    rows = (
+        db.query(ItemScore.item_id, ItemScore.topic_id, Topic.name, ItemScore.final_score, ItemScore.user_vote)
+        .join(Topic, Topic.id == ItemScore.topic_id)
+        .filter(ItemScore.item_id.in_(ids))
+        .order_by(Topic.priority, Topic.created_at)
+        .all()
+    )
+    by_item: dict[str, list[dict]] = {}
+    for item_id, tid, name, score, vote in rows:
+        by_item.setdefault(item_id, []).append({"topic_id": tid, "topic_name": name, "score": score, "vote": vote})
+    for i in items:
+        i["topic_votes"] = by_item.get(i["id"], [])
 
 
 WILDCARD_FLOOR = 0.2  # never surface papers the ranker considers plain noise
@@ -192,32 +211,64 @@ WILDCARD_BAND = 0.3  # how far below the threshold wildcards are drawn from
 
 
 def _wildcards(db: Session, topic_id: Optional[str], min_score: float, days: int, show_preprints: bool, now, n: int, exclude: set):
-    """Unread papers scoring in [min_score - band, min_score), a stable daily sample.
+    """Unread papers whose (best) score lies in [min_score - band, min_score): a stable daily sample.
 
-    The sample is keyed on the date, so the same wildcards are shown all day
-    instead of changing on every refresh.
+    All-topics scope: a paper qualifies only if its *best* score over all topics is in
+    the band (otherwise it is a normal inbox paper), and picks rotate over the topics
+    so every topic contributes. The sample is keyed on the date, so the same wildcards
+    are shown all day instead of changing on every refresh.
     """
     import hashlib
 
     low = max(WILDCARD_FLOOR, min_score - WILDCARD_BAND)
-    q = db.query(Item, ItemScore).join(ItemScore, ItemScore.item_id == Item.id).join(Topic, Topic.id == ItemScore.topic_id)
-    q = q.filter(ItemScore.final_score >= low, ItemScore.final_score < min_score, Item.is_acknowledged == False, Item.is_hidden == False)  # noqa: E712
+    q = (
+        db.query(ItemScore.item_id, ItemScore.topic_id, ItemScore.final_score)
+        .join(Item, Item.id == ItemScore.item_id)
+        .join(Topic, Topic.id == ItemScore.topic_id)
+        .filter(Item.is_acknowledged == False, Item.is_hidden == False)  # noqa: E712
+    )
     if topic_id:
-        q = q.filter(ItemScore.topic_id == topic_id)
+        q = q.filter(ItemScore.topic_id == topic_id, ItemScore.final_score >= low, ItemScore.final_score < min_score)
+    else:
+        q = q.filter(ItemScore.final_score >= low)  # need every row >= low to know each paper's best score
     if days > 0:
         q = q.filter(Item.published_at >= now - datetime.timedelta(days=days))
     if not show_preprints:
         q = q.filter(~preprint_clause())
-    best: dict[str, tuple] = {}
-    for item, s in q.limit(2000).all():
-        if item.id in exclude:
-            continue
-        cur = best.get(item.id)
-        if cur is None or (s.final_score or 0) > (cur[1] or 0):
-            best[item.id] = (item, s.final_score, s)
+
+    best: dict[str, tuple[str, float]] = {}  # item_id -> (topic_id of best score, best score)
+    for item_id, tid, score in q.all():
+        cur = best.get(item_id)
+        if cur is None or (score or 0.0) > cur[1]:
+            best[item_id] = (tid, score or 0.0)
+
     day = now.strftime("%Y-%m-%d")
-    ranked = sorted(best.values(), key=lambda t: hashlib.sha1(f"{day}:{t[0].id}".encode()).hexdigest())
-    return ranked[:n]
+    by_topic: dict[str, list[str]] = {}
+    for item_id, (tid, score) in best.items():
+        if item_id in exclude or not (low <= score < min_score):
+            continue
+        by_topic.setdefault(tid, []).append(item_id)
+    for ids in by_topic.values():
+        ids.sort(key=lambda i: hashlib.sha1(f"{day}:{i}".encode()).hexdigest())
+
+    # round-robin over topics (in a stable order) until n papers are picked
+    picked: list[str] = []
+    order = sorted(by_topic, key=lambda t: hashlib.sha1(f"{day}:{t}".encode()).hexdigest())
+    rank = 0
+    while len(picked) < n and any(rank < len(by_topic[t]) for t in order):
+        for t in order:
+            if rank < len(by_topic[t]) and len(picked) < n:
+                picked.append(by_topic[t][rank])
+        rank += 1
+    if not picked:
+        return []
+
+    items = {i.id: i for i in db.query(Item).filter(Item.id.in_(picked)).all()}
+    rows = {
+        (r.item_id, r.topic_id): r
+        for r in db.query(ItemScore).filter(ItemScore.item_id.in_(picked)).all()
+    }
+    return [(items[i], best[i][1], rows.get((i, best[i][0]))) for i in picked if i in items]
 
 
 @router.get("/counts", response_model=Dict[str, Any])
@@ -232,15 +283,15 @@ def get_counts(min_score: float = 0.5, days: int = 56, show_preprints: bool = Tr
             ItemScore.final_score >= min_score,
             Item.is_acknowledged == False,  # noqa: E712
             Item.is_hidden == False,  # noqa: E712
-            Item.published_at >= since,
         )
     )
+    if days > 0:
+        base = base.filter(Item.published_at >= since)
     if not show_preprints:
         base = base.filter(~preprint_clause())
-    rows = base.all()
     per_topic: dict[str, set] = {}
     all_items: set = set()
-    for topic_id, item_id in rows:
+    for topic_id, item_id in base.all():
         per_topic.setdefault(topic_id, set()).add(item_id)
         all_items.add(item_id)
     return {"all": len(all_items), "topics": {k: len(v) for k, v in per_topic.items()}}

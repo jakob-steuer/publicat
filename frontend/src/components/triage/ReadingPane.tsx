@@ -7,6 +7,7 @@ import { api, errorMessage } from '../../lib/client'
 import { useFollows } from '../../hooks/useFollows'
 import { useToast } from '../../hooks/useToast'
 import { ReasonList, ScoreChip } from './ScoreChip'
+import { TopicTags } from './TopicTags'
 import { VoteButtons } from './VoteButtons'
 import { formatDate } from '../../lib/format'
 
@@ -79,6 +80,7 @@ export function ReadingPane({ item, topics, onClose, onVote }: Props) {
         <div className="text-xs text-muted-foreground space-y-0.5">
           <div>{[item.venue, formatDate(item.published_at)].filter(Boolean).join(' · ')}</div>
           {(item.citation_count ?? 0) > 0 && <div>{item.citation_count} citations{item.influential_citation_count ? ` · ${item.influential_citation_count} influential` : ''}</div>}
+          {item.discovered_via && item.discovered_via.length > 0 && <div>Found via {item.discovered_via.join(', ')}</div>}
         </div>
 
         <div className="text-xs leading-relaxed flex flex-wrap gap-x-1.5 gap-y-1">
@@ -100,6 +102,8 @@ export function ReadingPane({ item, topics, onClose, onVote }: Props) {
             )
           })}
         </div>
+
+        <TopicTags item={item} topics={topics} />
 
         {(summary || item.t1_tldr) && (
           <section>

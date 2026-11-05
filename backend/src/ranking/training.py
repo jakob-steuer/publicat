@@ -126,6 +126,32 @@ def regularisation_for(n_labels: int) -> float:
 LAMBDA_MIN = 0.03
 
 
+BACKGROUND_NEGATIVES = 200
+
+
+def background_examples(db: Session, topic: Topic, follows: Follows, real_weight: float):
+    """Unvoted papers as very weak negatives ("a typical paper is not a hit").
+
+    Votes are mostly positive at first; a model fitted on positives alone just
+    raises every score. A random sample of unvoted papers, with a small total
+    weight, anchors it: upvoted papers have to stand out from the background.
+    Each sample weighs so little that a relevant-but-unread paper among them
+    is not pushed down in any noticeable way.
+    """
+    voted = db.query(ItemScore.item_id).filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None))
+    rows = db.query(Item).filter(Item.embedding.isnot(None), ~Item.id.in_(voted)).order_by(func.random()).limit(BACKGROUND_NEGATIVES).all()
+    E, S = [], []
+    for item in rows:
+        row = features.extract(Paper.from_item(item), topic.keywords, follows, None)
+        if row.embedding is not None:
+            E.append(row.embedding)
+            S.append(row.sparse)
+    if len(E) < 20:
+        return None
+    total = max(2.0, 0.25 * real_weight)
+    return np.array(E), np.array(S), np.zeros(len(E)), np.full(len(E), total / len(E))
+
+
 def train_topic(db: Session, topic: Topic, follows: Follows | None = None, lam: float | None = None) -> RankerModel:
     follows = follows or load_follows(db)
     E, S, y, w = labeled_examples(db, topic, follows)
@@ -134,8 +160,14 @@ def train_topic(db: Session, topic: Topic, follows: Follows | None = None, lam: 
     model = RankerModel.prior_only(prior, stats)
     lam = regularisation_for(len(y)) if lam is None else lam
     if len(y) > 0:
-        model.cv_auc = cross_validated_auc(lambda: RankerModel.prior_only(prior, stats), E, S, y, w, lam)
-        model.fit(E, S, y, w, lam=lam)
+        background = background_examples(db, topic, follows, float(w.sum()))
+        model.cv_auc = cross_validated_auc(lambda: RankerModel.prior_only(prior, stats), E, S, y, w, lam, extra=background)
+        if background is not None:
+            Eb, Sb, yb, wb = background
+            model.fit(np.vstack([E, Eb]), np.vstack([S, Sb]), np.concatenate([y, yb]), np.concatenate([w, wb]), lam=lam)
+            model.n_pos, model.n_neg = int(y.sum()), int(len(y) - y.sum())  # report real votes only
+        else:
+            model.fit(E, S, y, w, lam=lam)
     model.meta = {"n_examples": int(len(y)), "background_stats": stats}
 
     row = db.get(TopicModel, topic.id)

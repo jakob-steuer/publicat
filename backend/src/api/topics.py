@@ -2,8 +2,11 @@ import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src import jobs
 from src.database import SessionLocal, get_db
 from src.models.item_score import ItemScore
 from src.models.topic import Topic
@@ -76,7 +79,8 @@ async def prepare_topic(topic_id: str, rescore_all: bool, then_sync_days: Option
             from src.api.items import full_sync
 
             if not await full_sync(db, days_back=then_sync_days, name=f"initial fetch for '{topic.name}'"):
-                print(f"Initial fetch for '{topic.name}' skipped: another job is running (the next sync will pick it up).", flush=True)
+                jobs.request_backfill(then_sync_days)
+                print(f"Initial fetch for '{topic.name}' queued: it runs as soon as the current job finishes.", flush=True)
     except Exception as e:
         print(f"prepare_topic failed for {topic_id}: {e!r}", flush=True)
     finally:
@@ -87,6 +91,7 @@ async def prepare_topic(topic_id: str, rescore_all: bool, then_sync_days: Option
 def create_topic(topic_in: TopicCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     data = topic_in.model_dump()
     data["seed_papers"] = [s for s in (data.get("seed_papers") or [])] or None
+    data["priority"] = (db.query(func.max(Topic.priority)).scalar() or 0) + 1
     db_topic = Topic(
         **data,
         embedding=_local_embedding(_topic_text(topic_in.name, topic_in.description, topic_in.keywords)),
@@ -101,7 +106,28 @@ def create_topic(topic_in: TopicCreate, background_tasks: BackgroundTasks, db: S
 
 @router.get("/", response_model=List[TopicResponse])
 def read_topics(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return [_response(t) for t in db.query(Topic).filter(Topic.user_id == "1").offset(skip).limit(limit).all()]
+    q = db.query(Topic).filter(Topic.user_id == "1").order_by(Topic.priority, Topic.created_at)
+    return [_response(t) for t in q.offset(skip).limit(limit).all()]
+
+
+class TopicOrder(BaseModel):
+    ids: List[str]
+
+
+@router.put("/order", response_model=List[TopicResponse])
+def reorder_topics(order: TopicOrder, db: Session = Depends(get_db)):
+    """Set the display order of topics (sidebar, settings). Unknown ids are ignored."""
+    topics = {t.id: t for t in db.query(Topic).filter(Topic.user_id == "1").all()}
+    position = 0
+    for tid in order.ids:
+        if tid in topics:
+            topics.pop(tid).priority = position
+            position += 1
+    for t in sorted(topics.values(), key=lambda t: (t.priority or 0, t.created_at)):  # not mentioned: keep after
+        t.priority = position
+        position += 1
+    db.commit()
+    return read_topics(db=db)
 
 
 @router.get("/models", response_model=Dict[str, TopicModelStats])

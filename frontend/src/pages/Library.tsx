@@ -17,17 +17,41 @@ interface Props {
 export default function Library({ mode, prefs }: Props) {
   const { toast } = useToast()
   const [search, setSearch] = useState('')
+  const [topicFilter, setTopicFilter] = useState<string>('all')
   const { data: items = [], isLoading } = useQuery({ queryKey: ['library', mode], queryFn: mode === 'starred' ? api.starred : api.discarded })
   const { data: topics = [] } = useQuery({ queryKey: ['topics'], queryFn: api.topics })
 
+  // A paper sits under every topic it was tagged into (vote >= 1 there); without any
+  // tag it sits under the topic that scored it best, else under "No topic".
+  const topicsOf = (i: Item): string[] => {
+    const tagged = (i.topic_votes ?? []).filter(v => (v.vote ?? 0) >= 1).map(v => v.topic_id)
+    if (tagged.length) return tagged
+    return i.topic_id ? [i.topic_id] : ['none']
+  }
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {}
+    for (const i of items) for (const t of topicsOf(i)) c[t] = (c[t] ?? 0) + 1
+    return c
+  }, [items])
+
   const filtered: Item[] = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return items
-    return items.filter(i => i.title?.toLowerCase().includes(q) || i.abstract?.toLowerCase().includes(q) || i.authors?.some(a => a.toLowerCase().includes(q)))
-  }, [items, search])
+    return items.filter(i => {
+      if (topicFilter !== 'all' && !topicsOf(i).includes(topicFilter)) return false
+      if (!q) return true
+      return i.title?.toLowerCase().includes(q) || i.abstract?.toLowerCase().includes(q) || i.authors?.some(a => a.toLowerCase().includes(q))
+    })
+  }, [items, search, topicFilter])
+
+  const chip = (id: string, label: string, n: number) => (
+    <button key={id} onClick={() => setTopicFilter(id)} className={`px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap border transition-colors ${topicFilter === id ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/50 text-muted-foreground border-transparent hover:border-primary/30 hover:text-foreground'}`}>
+      {label} <span className="tabular-nums opacity-70">{n}</span>
+    </button>
+  )
 
   const header = (
-    <div className="border-b border-border bg-background/95 backdrop-blur sticky top-0 z-20 px-3 pt-3 pb-2 flex flex-wrap items-end gap-x-4 gap-y-2">
+    <div className="border-b border-border bg-background/95 backdrop-blur sticky top-0 z-20">
+    <div className="px-3 pt-3 pb-2 flex flex-wrap items-end gap-x-4 gap-y-2">
       <div>
         <h1 className="text-xl font-bold tracking-tight">{mode === 'starred' ? 'Starred library' : 'Discarded papers'}</h1>
         <p className="text-xs text-muted-foreground">{items.length} papers{mode === 'discarded' ? ' · upvote or mark read to bring one back' : ' · kept forever, exported to Zotero RSS'}</p>
@@ -45,6 +69,12 @@ export default function Library({ mode, prefs }: Props) {
           </button>
         </>
       )}
+    </div>
+    <div className="px-3 pb-2 flex gap-1.5 overflow-x-auto hide-scrollbar">
+      {chip('all', 'All', items.length)}
+      {topics.filter(t => counts[t.id]).map(t => chip(t.id, t.name, counts[t.id]))}
+      {counts['none'] ? chip('none', 'No topic', counts['none']) : null}
+    </div>
     </div>
   )
 

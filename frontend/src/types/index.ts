@@ -38,7 +38,20 @@ export interface Item {
   reasons?: string[];
   /** Shown from just below the relevance threshold to counter the filter bubble. */
   wildcard?: boolean;
+  /** Discovery lanes that found this paper, e.g. ["arXiv", "S2 search"]. */
+  discovered_via?: string[] | null;
+  /** Score and vote of this paper in every topic it has been scored for. */
+  topic_votes?: TopicVote[];
 }
+
+export interface TopicVote {
+  topic_id: string;
+  topic_name: string;
+  score: number | null;
+  vote: number | null;
+}
+
+export type TopicTagState = 'in' | 'out' | 'none'
 
 export type Vote = 2 | 1 | 0 | -1 | null
 
@@ -154,12 +167,22 @@ export interface Settings {
 export interface SyncRun {
   id: string;
   job: string;
-  status: 'running' | 'complete' | 'partial' | 'aborted' | 'error';
+  status: 'running' | 'complete' | 'partial' | 'aborted' | 'error' | 'interrupted';
   days_back?: number | null;
   started_at: string;
   finished_at?: string | null;
   errors: number;
-  counters: Record<string, number>;
+  counters: {
+    discovered?: number;
+    new_candidates?: number;
+    enriched?: number;
+    stored?: number;
+    cleaned_up?: number;
+    /** lane -> [returned by the source, within the date window] */
+    sources?: Record<string, [number, number]>;
+    stored_by_source?: Record<string, number>;
+    error_messages?: string[];
+  };
   message?: string | null;
 }
 

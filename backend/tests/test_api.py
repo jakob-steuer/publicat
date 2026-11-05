@@ -193,7 +193,8 @@ def test_schema_upgrade_is_additive_and_idempotent(tmp_path):
 
     engine = create_engine(f"sqlite:///{path}")
     applied = upgrade(engine)
-    assert set(applied) == {f"{t}.{c}" for t, c, _ in NEW_COLUMNS} | {"removed 1 orphaned item_scores"}
+    # only tables that already existed need ALTERs; `items` is created fresh with all columns
+    assert set(applied) == {f"{t}.{c}" for t, c, _ in NEW_COLUMNS if t in ("topics", "item_scores")} | {"removed 1 orphaned item_scores"}
     assert upgrade(engine) == []  # second run is a no-op
     cols = {c["name"] for c in inspect(engine).get_columns("topics")}
     assert {"prior_vector", "seed_papers", "arxiv_categories", "exclude_keywords"} <= cols
@@ -252,3 +253,54 @@ def test_deep_links_serve_the_app_but_api_404s_stay(client):
     assert page.status_code == 200 and "<div id=\"root\">" in page.text
     api = client.get("/items/nope/unknown", headers={"accept": "application/json"})
     assert api.status_code in (404, 405)
+
+
+def test_topic_order_endpoint(client, db):
+    a, _b, c_ = _topic(db, "A", 1), _topic(db, "B", 2), _topic(db, "C", 3)
+    db.commit()
+    r = client.put("/topics/order", json={"ids": [c_.id, a.id]}).json()
+    assert [t["name"] for t in r] == ["C", "A", "B"]  # unmentioned topics keep their place after
+    assert [t["name"] for t in client.get("/topics/").json()] == ["C", "A", "B"]
+
+
+def test_positive_only_votes_do_not_inflate_every_score(db):
+    """With background pseudo-negatives, upvoting a few papers must not lift unrelated ones."""
+    from src.ranking.paper import Paper, load_follows
+    from src.ranking.scoring import score_against_topic
+    from src.ranking.training import train_topic
+
+    topic = _topic(db, "A", 1)
+    liked = np.array(unit_vector(20))
+
+    def mix(base, seed, w=0.85):
+        v = w * base + (1 - w) * np.array(unit_vector(seed))
+        return (v / np.linalg.norm(v)).tolist()
+
+    for i in range(120):  # unrelated background papers
+        it = _item(db, f"bg{i}", emb_seed=500 + i)
+        db.add(ItemScore(item_id=it.id, topic_id=topic.id, semantic_score=0.3, final_score=0.3))
+    for i in range(6):  # six upvotes, no negative vote at all
+        it = _item(db, f"liked{i}", emb=mix(liked, 900 + i))
+        db.add(ItemScore(item_id=it.id, topic_id=topic.id, semantic_score=0.5, final_score=0.5, user_vote=1))
+    db.commit()
+
+    model = train_topic(db, topic)
+    follows = load_follows(db)
+    unrelated = score_against_topic(Paper("t", "a", unit_vector(7777), [], None), topic, model, follows).final_score
+    similar = score_against_topic(Paper("t", "a", mix(liked, 4242), [], None), topic, model, follows).final_score
+    assert model.n_pos == 6 and model.n_neg == 0
+    assert similar > 0.5 > unrelated
+    assert unrelated < 0.3
+
+
+def test_interrupted_runs_are_closed_on_startup(db):
+    from src import main
+    from src.models.sync_run import SyncRun
+
+    db.add(SyncRun(job="initial fetch", status="running", days_back=30))
+    db.add(SyncRun(job="older", status="complete", days_back=3))
+    db.commit()
+    main._close_interrupted_runs()
+    db.expire_all()
+    statuses = {r.job: r.status for r in db.query(SyncRun).all()}
+    assert statuses == {"initial fetch": "interrupted", "older": "complete"}

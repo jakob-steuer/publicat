@@ -15,6 +15,8 @@ import type {
   SyncRun,
   Topic,
   TopicModelStats,
+  TopicTagState,
+  TopicVote,
   Vote,
   ZoteroCollection,
   ZoteroLibraryStatus,
@@ -36,6 +38,7 @@ export const api = {
   updateTopic: (id: string, draft: TopicDraft) => axios.put<Topic>(`/topics/${id}`, payloadFromDraft(draft)).then(r => r.data),
   deleteTopic: (id: string) => axios.delete(`/topics/${id}`),
   retrainTopic: (id: string) => axios.post(`/topics/${id}/retrain`),
+  reorderTopics: (ids: string[]) => axios.put<Topic[]>('/topics/order', { ids }).then(r => r.data),
   searchPapers: (q: string) => get<PaperSearchResult[]>('/topics/search_papers', { q }),
   voteLeaks: () => get<{ items: number; rows: number }>('/topics/vote_leaks'),
   repairVotes: () => axios.post<{ items: number; cleared_rows: number; retraining_topics: number }>('/topics/repair_votes').then(r => r.data),
@@ -50,6 +53,8 @@ export const api = {
   vote: (id: string, vote: Vote, topicId?: string | null) =>
     axios.post<{ status: string; topic_id: string | null }>(`/items/${id}/vote`, { topic_id: topicId ?? null, vote }).then(r => r.data),
   bulkRescore: (ids: string[]) => axios.post('/items/bulk_rescore', { item_ids: ids }),
+  tagTopic: (itemId: string, topicId: string, state: TopicTagState) =>
+    axios.put<{ status: string; topic_votes: TopicVote[] }>(`/items/${itemId}/topics/${topicId}`, { state }).then(r => r.data),
 
   // ---- follows
   follows: () => get<Follow[]>('/follows/'),
@@ -62,7 +67,7 @@ export const api = {
   saveSettings: (s: Partial<Settings>) => axios.post<Settings>('/settings/', s).then(r => r.data),
   progress: () => get<SyncProgress>('/items/progress'),
   syncRuns: (limit = 8) => get<SyncRun[]>('/items/sync_runs', { limit }),
-  startFetch: () => axios.post('/items/fetch'),
+  startFetch: (days?: number) => axios.post('/items/fetch', null, { params: days ? { days } : undefined }),
   syncControl: (action: 'pause' | 'resume' | 'abort') => axios.post('/items/sync/control', { action }),
   clearUnstarred: () => axios.delete<{ deleted: number }>('/items/unstarred').then(r => r.data),
 

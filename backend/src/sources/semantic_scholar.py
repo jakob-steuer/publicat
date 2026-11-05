@@ -125,27 +125,29 @@ async def discover_new_papers_s2(topics: List[Any], since: datetime, feedback: D
     discovered: Dict[str, Dict[str, Any]] = {}
     stats: Dict[str, int] = {}
 
-    def add(source: str, papers):
+    def add(source: str, papers, lane: str):
         kept = 0
         for p in papers:
             if p and p.get("paperId") and _published_after(p, since):
                 kept += 1
-                discovered.setdefault(p["paperId"], p)
+                entry = discovered.setdefault(p["paperId"], p)
+                entry.setdefault("_via", set()).add(lane)
         stats[source] = stats.get(source, 0) + kept
+        jobs.count_source(lane, len(papers), kept)
         print(f"  discovery/{source}: {len(papers)} returned, {kept} within window", flush=True)
 
     async with httpx.AsyncClient() as client:
         for topic in topics:
             if jobs.aborted():
                 break
-            add(f"search[{topic.name[:24]}]", await search_papers_bulk_s2(client, _query_for_topic(topic), since))
+            add(f"search[{topic.name[:24]}]", await search_papers_bulk_s2(client, _query_for_topic(topic), since), "S2 search")
             fb = feedback.get(topic.id) or {}
             if fb.get("positive"):
-                add(f"recommend[{topic.name[:24]}]", await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])))
+                add(f"recommend[{topic.name[:24]}]", await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])), "S2 recommendations")
         for author_id in author_ids or []:
             if jobs.aborted():
                 break
-            add(f"author[{author_id}]", await author_papers_s2(client, author_id))
+            add(f"author[{author_id}]", await author_papers_s2(client, author_id), "followed author")
     print(f"  discovery/S2 total unique: {len(discovered)}", flush=True)
     return list(discovered.values())
 

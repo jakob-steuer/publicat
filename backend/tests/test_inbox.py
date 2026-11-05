@@ -135,3 +135,54 @@ def test_wildcards_come_from_just_below_the_threshold(client, db):
     again = client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3}).json()
     assert [i["id"] for i in again["items"]] == [i["id"] for i in r["items"]]  # stable within the day
     assert not any(i.get("wildcard") for i in client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3, "q": "above"}).json()["items"])
+
+
+def test_wildcards_in_all_topics_rotate_over_topics_and_respect_best_score(client, db):
+    t1, t2, t3 = _topic(db, "A", 1), _topic(db, "B", 2), _topic(db, "C", 3)
+    # many band papers for topic A (inserted first), a few for B and C
+    for i in range(40):
+        it = _item(db, f"a{i}", days_old=2)
+        db.add(ItemScore(item_id=it.id, topic_id=t1.id, final_score=0.4, semantic_score=0.4))
+    for name, topic in (("b", t2), ("c", t3)):
+        for i in range(3):
+            it = _item(db, f"{name}{i}", days_old=2)
+            db.add(ItemScore(item_id=it.id, topic_id=topic.id, final_score=0.45, semantic_score=0.45))
+    # in the band for A but a regular inbox paper for B: must NOT be a wildcard
+    both = _item(db, "both", days_old=2)
+    db.add(ItemScore(item_id=both.id, topic_id=t1.id, final_score=0.4, semantic_score=0.4))
+    db.add(ItemScore(item_id=both.id, topic_id=t2.id, final_score=0.8, semantic_score=0.8))
+    db.commit()
+
+    r = client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3}).json()
+    wild = [i for i in r["items"] if i.get("wildcard")]
+    assert sorted(i["topic_name"] for i in wild) == ["A", "B", "C"]  # one per topic, not three from A
+    assert "both" not in [i["title"] for i in wild]
+    assert all(i["score"] < 0.5 for i in wild)
+    scoped = client.get("/inbox/", params={"min_score": 0.5, "wildcards": 3, "topic_id": t3.id}).json()
+    assert [i["topic_name"] for i in scoped["items"] if i.get("wildcard")] == ["C", "C", "C"]
+
+
+def test_topic_tags_add_and_remove_without_touching_item_state(client, db):
+    t1, t2 = _topic(db, "A", 1), _topic(db, "B", 2)
+    it = _item(db, "paper", days_old=2, starred=True)
+    db.add(ItemScore(item_id=it.id, topic_id=t1.id, final_score=0.8, semantic_score=0.8, user_vote=2))
+    db.commit()
+
+    # add to topic B (no score row yet): becomes a starred example for B
+    r = client.put(f"/items/{it.id}/topics/{t2.id}", json={"state": "in"}).json()
+    votes = {v["topic_name"]: v["vote"] for v in r["topic_votes"]}
+    assert votes == {"A": 2, "B": 2}
+    # remove from topic A: downvote for A only, the paper stays starred and visible
+    r = client.put(f"/items/{it.id}/topics/{t1.id}", json={"state": "out"}).json()
+    assert {v["topic_name"]: v["vote"] for v in r["topic_votes"]} == {"A": -1, "B": 2}
+    db.expire_all()
+    item = db.get(Item, it.id)
+    assert item.is_starred is True and item.is_hidden is False
+    # clear the statement about A
+    r = client.put(f"/items/{it.id}/topics/{t1.id}", json={"state": "none"}).json()
+    assert {v["topic_name"]: v["vote"] for v in r["topic_votes"]} == {"A": None, "B": 2}
+
+    starred = client.get("/items/starred").json()
+    assert {v["topic_name"]: v["vote"] for v in starred[0]["topic_votes"]} == {"A": None, "B": 2}
+    inbox = client.get("/inbox/", params={"filter": "starred"}).json()
+    assert len(inbox["items"][0]["topic_votes"]) == 2

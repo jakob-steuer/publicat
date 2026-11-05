@@ -251,8 +251,12 @@ def auc(scores, labels) -> float:
     return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
 
 
-def cross_validated_auc(model_factory, E, S, y, w, lam, folds=5, seed=0) -> float | None:
-    """AUC of a model trained on 4/5 of the votes and scored on the rest, averaged over folds."""
+def cross_validated_auc(model_factory, E, S, y, w, lam, folds=5, seed=0, extra=None) -> float | None:
+    """AUC of a model trained on 4/5 of the votes and scored on the rest, averaged over folds.
+
+    `extra` = (E, S, y, w) of train-only examples (background pseudo-negatives)
+    added to every training fold and never scored.
+    """
     y = np.asarray(y)
     if len(y) < 20 or y.sum() < 5 or (len(y) - y.sum()) < 5:
         return None
@@ -264,6 +268,10 @@ def cross_validated_auc(model_factory, E, S, y, w, lam, folds=5, seed=0) -> floa
     for k in range(folds):
         test = parts[k]
         train = np.concatenate([parts[j] for j in range(folds) if j != k])
-        m = model_factory().fit(E[train], S[train], y[train], w[train], lam=lam)
+        Et, St, yt, wt = E[train], S[train], y[train], w[train]
+        if extra is not None:
+            Et, St = np.vstack([Et, extra[0]]), np.vstack([St, extra[1]])
+            yt, wt = np.concatenate([yt, extra[2]]), np.concatenate([wt, extra[3]])
+        m = model_factory().fit(Et, St, yt, wt, lam=lam)
         preds[test] = m.logits(E[test], S[test])
     return auc(preds, y)

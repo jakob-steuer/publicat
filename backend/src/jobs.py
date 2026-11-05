@@ -28,7 +28,32 @@ state: dict[str, Any] = {
 def note_error(what: str) -> None:
     """Record a failed request or source; the run will be marked partial."""
     state["errors"] = int(state.get("errors", 0)) + 1
+    msgs = state["counters"].setdefault("error_messages", [])
+    if len(msgs) < 10:
+        msgs.append(what[:200])
     print(f"  [warn] {what}", flush=True)
+
+
+def count_source(name: str, returned: int, kept: int) -> None:
+    """Per-source discovery counts for the sync log: how many came back, how many were in the window."""
+    sources = state["counters"].setdefault("sources", {})
+    cur = sources.get(name, [0, 0])
+    sources[name] = [cur[0] + int(returned), cur[1] + int(kept)]
+
+
+_pending_backfill_days = 0
+
+
+def request_backfill(days: int) -> None:
+    """A topic was created while a job was running: fetch its history once the slot is free."""
+    global _pending_backfill_days
+    _pending_backfill_days = max(_pending_backfill_days, int(days))
+
+
+def take_backfill() -> int:
+    global _pending_backfill_days
+    days, _pending_backfill_days = _pending_backfill_days, 0
+    return days
 
 
 def count(key: str, value: int) -> None:

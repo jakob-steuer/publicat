@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Item, Topic, Vote } from '../../types'
 import { PaperRow } from './PaperRow'
 import { ReadingPane } from './ReadingPane'
@@ -121,8 +121,13 @@ export function PaperList({ items, topics, showTopic, autoAdvance, onReachEnd, e
                 <button onClick={() => setShowHelp(true)} className="hover:text-foreground">Keyboard: j k s u n d z · <kbd className="font-mono">?</kbd></button>
               </div>
               {items.map((item, idx) => (
+                <Fragment key={item.id}>
+                {item.wildcard && !items[idx - 1]?.wildcard && (
+                  <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-violet-700 dark:text-violet-300 bg-violet-50 dark:bg-violet-950/30 border-y border-violet-200/70 dark:border-violet-800/60">
+                    Wildcards · below your relevance threshold on purpose. Vote to tell the ranker if it was right to hide them.
+                  </div>
+                )}
                 <PaperRow
-                  key={item.id}
                   item={item}
                   focused={idx === safeIdx}
                   open={item.id === openId}
@@ -133,6 +138,7 @@ export function PaperList({ items, topics, showTopic, autoAdvance, onReachEnd, e
                   onVote={v => voteOn(item, v, undefined, false)}
                   onToggleSelect={() => toggleSelect(item.id)}
                 />
+                </Fragment>
               ))}
               {footer}
             </>

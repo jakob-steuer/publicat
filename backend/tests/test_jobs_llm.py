@@ -183,3 +183,17 @@ def test_neutral_vote_is_only_a_slight_negative():
     from src.ranking.training import VOTE_WEIGHTS
 
     assert VOTE_WEIGHTS[0] <= 0.25 * VOTE_WEIGHTS[1] and VOTE_WEIGHTS[-1] >= 2 * VOTE_WEIGHTS[1]
+
+
+def test_backfill_request_and_source_counters():
+    jobs.state.update(counters={}, errors=0)
+    jobs.request_backfill(30)
+    jobs.request_backfill(7)
+    assert jobs.take_backfill() == 30 and jobs.take_backfill() == 0
+    jobs.count_source("arXiv", 100, 100)
+    jobs.count_source("S2 search", 20, 12)
+    jobs.count_source("S2 search", 10, 3)
+    jobs.note_error("S2 batch failed")
+    assert jobs.state["counters"]["sources"] == {"arXiv": [100, 100], "S2 search": [30, 15]}
+    assert jobs.state["counters"]["error_messages"] == ["S2 batch failed"]
+    jobs.state.update(counters={}, errors=0)

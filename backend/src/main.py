@@ -52,6 +52,26 @@ async def bootstrap_models() -> None:
         await topics.prepare_topic(topic_id, rescore_all=False)
 
 
+def _close_interrupted_runs() -> None:
+    """A run still marked 'running' at start-up was cut off by a shutdown or crash."""
+    from datetime import datetime, timezone
+
+    from src import database
+    from src.models.sync_run import SyncRun
+
+    db = database.SessionLocal()
+    try:
+        stale = db.query(SyncRun).filter(SyncRun.status == "running").all()
+        for run in stale:
+            run.status = "interrupted"
+            run.finished_at = datetime.now(timezone.utc)
+            run.message = "The app was closed while this sync was running; its period is fetched again next time."
+        if stale:
+            db.commit()
+    finally:
+        db.close()
+
+
 async def startup_tasks():
     await bootstrap_models()
     if os.environ.get("PUBLICAT_FETCH_ON_START", "1") not in ("0", "false", "False"):
@@ -63,6 +83,7 @@ async def lifespan(app: FastAPI):
     applied = upgrade(engine)
     if applied:
         print(f"Database schema upgraded: {applied}")
+    _close_interrupted_runs()
     scheduler.add_job(scheduled_fetch, trigger=IntervalTrigger(hours=24), id="scheduled_fetch_job", replace_existing=True)
     scheduler.start()
     # PUBLICAT_BOOTSTRAP=0 skips model bootstrap + launch sync (tests, smoke runs).

@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
-import React, { useState } from 'react'
+import React, { Fragment, useState } from 'react'
 
 import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats, SyncRun } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
@@ -83,6 +83,23 @@ export default function Settings() {
     queryKey: ['topicModels'],
     queryFn: async () => (await axios.get('/topics/models')).data,
     refetchInterval: 15000,
+  })
+  const reorderTopics = useMutation({
+    mutationFn: (ids: string[]) => api.reorderTopics(ids),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topics'] }),
+  })
+  const moveTopic = (index: number, delta: number) => {
+    if (!topics) return
+    const ids = topics.map(t => t.id)
+    const target = index + delta
+    if (target < 0 || target >= ids.length) return
+    ;[ids[index], ids[target]] = [ids[target], ids[index]]
+    reorderTopics.mutate(ids)
+  }
+  const [openRun, setOpenRun] = useState<string | null>(null)
+  const backfill = useMutation({
+    mutationFn: (days: number) => api.startFetch(days),
+    onSuccess: r => { toast(r.data?.status === 'error' ? r.data.message : 'Backfill started', { kind: r.data?.status === 'error' ? 'error' : 'info' }); queryClient.invalidateQueries({ queryKey: ['syncProgress'] }) },
   })
   const retrainTopic = useMutation({
     mutationFn: async (topicId: string) => axios.post(`/topics/${topicId}/retrain`),
@@ -275,9 +292,13 @@ export default function Settings() {
           <p>Loading topics...</p>
         ) : (
           <div className="space-y-4 mb-6">
-            {topics?.map((topic: Topic) => (
+            {topics?.map((topic: Topic, index: number) => (
               <div key={topic.id} className="flex justify-between items-center p-4 border rounded bg-background gap-4">
-                <div className="min-w-0">
+                <div className="flex flex-col gap-1 shrink-0">
+                  <button onClick={() => moveTopic(index, -1)} disabled={index === 0} className="w-6 h-6 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">▲</button>
+                  <button onClick={() => moveTopic(index, 1)} disabled={index === (topics?.length ?? 0) - 1} className="w-6 h-6 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">▼</button>
+                </div>
+                <div className="min-w-0 flex-1">
                   <h3 className="font-semibold">{topic.name}</h3>
                   <p className="text-sm text-muted-foreground">{topic.description}</p>
                   {topic.keywords && <p className="text-xs text-primary mt-1 font-semibold">Keywords: {topic.keywords}</p>}
@@ -566,13 +587,18 @@ export default function Settings() {
         {!syncRuns?.length ? (
           <p className="text-sm text-muted-foreground italic">No syncs recorded yet.</p>
         ) : (
+          <>
+          <div className="mb-3">
+            <button onClick={() => backfill.mutate(30)} disabled={backfill.isPending} className="text-xs px-2.5 py-1.5 rounded-md border border-border hover:bg-muted font-semibold" title="Fetch the last 30 days for all topics, e.g. after adding topics">Fetch the last 30 days</button>
+          </div>
           <table className="w-full text-sm">
             <thead className="text-xs text-muted-foreground text-left">
               <tr><th className="py-1 pr-3 font-medium">When</th><th className="py-1 pr-3 font-medium">Job</th><th className="py-1 pr-3 font-medium">Result</th><th className="py-1 pr-3 font-medium text-right">Window</th><th className="py-1 pr-3 font-medium text-right">New</th><th className="py-1 font-medium text-right">Errors</th></tr>
             </thead>
             <tbody>
               {syncRuns.map(r => (
-                <tr key={r.id} className="border-t border-border/60" title={r.message ?? ''}>
+                <Fragment key={r.id}>
+                <tr className="border-t border-border/60 cursor-pointer hover:bg-muted/40" title="Click for per-source details" onClick={() => setOpenRun(o => (o === r.id ? null : r.id))}>
                   <td className="py-1.5 pr-3 whitespace-nowrap">{new Date(r.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
                   <td className="py-1.5 pr-3 truncate max-w-[16ch]">{r.job}</td>
                   <td className={`py-1.5 pr-3 font-medium ${r.status === 'complete' ? 'text-emerald-600' : r.status === 'running' ? 'text-primary' : r.status === 'partial' ? 'text-amber-600' : 'text-red-600'}`}>{r.status}</td>
@@ -580,9 +606,33 @@ export default function Settings() {
                   <td className="py-1.5 pr-3 text-right tabular-nums">{r.counters?.stored ?? '–'}</td>
                   <td className="py-1.5 text-right tabular-nums">{r.errors}</td>
                 </tr>
+                {openRun === r.id && (
+                  <tr className="bg-muted/30">
+                    <td colSpan={6} className="px-3 py-3 text-xs">
+                      {r.counters?.sources ? (
+                        <table className="w-full mb-2">
+                          <thead className="text-muted-foreground text-left"><tr><th className="font-medium pr-3">Source</th><th className="font-medium pr-3 text-right">Returned</th><th className="font-medium pr-3 text-right">In date window</th><th className="font-medium text-right">Stored</th></tr></thead>
+                          <tbody>
+                            {Object.entries(r.counters.sources).map(([name, [returned, kept]]) => (
+                              <tr key={name} className={returned === 0 ? 'text-amber-600' : ''}>
+                                <td className="pr-3">{name}</td><td className="pr-3 text-right tabular-nums">{returned}</td><td className="pr-3 text-right tabular-nums">{kept}</td><td className="text-right tabular-nums">{r.counters.stored_by_source?.[name] ?? 0}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : <p className="text-muted-foreground mb-2">No per-source counts recorded for this run.</p>}
+                      <p className="text-muted-foreground">
+                        {r.counters?.discovered ?? 0} candidates · {r.counters?.new_candidates ?? 0} not yet known · {r.counters?.enriched ?? 0} with metadata in the window · {r.counters?.stored ?? 0} stored · {r.counters?.cleaned_up ?? 0} old papers removed
+                      </p>
+                      {r.message && <p className="mt-1 text-amber-700 dark:text-amber-400">{r.message}</p>}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
 
