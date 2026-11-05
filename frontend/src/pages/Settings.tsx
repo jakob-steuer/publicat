@@ -1,9 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
-import React, { useState } from 'react'
+import React, { Fragment, useState } from 'react'
 
-import type { Topic, Follow } from '../types'
+import type { Topic, Follow, Settings as AppSettings, TopicDraft, TopicModelStats, SyncRun } from '../types'
 import { EditTopicModal } from '../components/EditTopicModal'
+import { TopicForm } from '../components/TopicForm'
+import { ZoteroImport } from '../components/ZoteroImport'
+import { emptyDraft, payloadFromDraft } from '../lib/topicDraft'
+import { useToast } from '../hooks/useToast'
+import { api } from '../lib/client'
 
 interface AuthorResult {
   authorId: string | null;
@@ -12,32 +17,46 @@ interface AuthorResult {
   isOrcid?: boolean;
   paperCount?: number;
   hIndex?: number;
-  affiliations?: any[];
+  affiliations?: string[];
 }
 
 const fetchTopics = async () => {
-  const { data } = await axios.get('http://localhost:8001/topics/')
+  const { data } = await axios.get('/topics/')
   return data
 }
 
 const fetchSettings = async () => {
-  const { data } = await axios.get('http://localhost:8001/settings/')
+  const { data } = await axios.get('/settings/')
   return data
 }
 
 const fetchFollows = async () => {
-  const { data } = await axios.get('http://localhost:8001/follows/')
+  const { data } = await axios.get('/follows/')
   return data
 }
 
 
 export default function Settings() {
   const queryClient = useQueryClient()
+  const { toast } = useToast()
+  const { data: zotero } = useQuery({ queryKey: ['zoteroStatus'], queryFn: api.zoteroStatus, refetchInterval: 20000, retry: false })
+  const [zoteroAuto, setZoteroAuto] = useState(false)
+  const [zoteroUserId, setZoteroUserId] = useState('')
+  const [zoteroKey, setZoteroKey] = useState('')
+  const { data: leaks } = useQuery({ queryKey: ['voteLeaks'], queryFn: api.voteLeaks })
+  const { data: syncRuns } = useQuery<SyncRun[]>({ queryKey: ['syncRuns'], queryFn: () => api.syncRuns(8), refetchInterval: 30000 })
+  const repairVotes = useMutation({
+    mutationFn: api.repairVotes,
+    onSuccess: r => {
+      toast(`Fixed ${r.items} papers: ${r.cleared_rows} copied votes removed, ${r.retraining_topics} topics retraining`, { kind: 'success', duration: 6000 })
+      queryClient.invalidateQueries({ queryKey: ['voteLeaks'] })
+      queryClient.invalidateQueries({ queryKey: ['topicModels'] })
+    },
+    onError: () => toast('Repair failed', { kind: 'error' }),
+  })
   
   // Topic state
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [keywords, setKeywords] = useState('')
+  const [draft, setDraft] = useState<TopicDraft>(emptyDraft)
   const [isCreating, setIsCreating] = useState(false)
   
   // Edit Topic state
@@ -59,9 +78,35 @@ export default function Settings() {
   const [isSearchingAuthor, setIsSearchingAuthor] = useState(false)
   const [authorBoost, setAuthorBoost] = useState('0.15')
 
-  const { data: topics, isLoading: isLoadingTopics } = useQuery({ queryKey: ['topics'], queryFn: fetchTopics })
-  const { data: config } = useQuery({ 
-    queryKey: ['settings'], 
+  const { data: topics, isLoading: isLoadingTopics } = useQuery<Topic[]>({ queryKey: ['topics'], queryFn: fetchTopics })
+  const { data: topicModels } = useQuery<Record<string, TopicModelStats>>({
+    queryKey: ['topicModels'],
+    queryFn: async () => (await axios.get('/topics/models')).data,
+    refetchInterval: 15000,
+  })
+  const reorderTopics = useMutation({
+    mutationFn: (ids: string[]) => api.reorderTopics(ids),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topics'] }),
+  })
+  const moveTopic = (index: number, delta: number) => {
+    if (!topics) return
+    const ids = topics.map(t => t.id)
+    const target = index + delta
+    if (target < 0 || target >= ids.length) return
+    ;[ids[index], ids[target]] = [ids[target], ids[index]]
+    reorderTopics.mutate(ids)
+  }
+  const [openRun, setOpenRun] = useState<string | null>(null)
+  const backfill = useMutation({
+    mutationFn: (days: number) => api.startFetch(days),
+    onSuccess: r => { toast(r.data?.status === 'error' ? r.data.message : 'Backfill started', { kind: r.data?.status === 'error' ? 'error' : 'info' }); queryClient.invalidateQueries({ queryKey: ['syncProgress'] }) },
+  })
+  const retrainTopic = useMutation({
+    mutationFn: async (topicId: string) => axios.post(`/topics/${topicId}/retrain`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topicModels'] }),
+  })
+  const { data: config } = useQuery<AppSettings>({
+    queryKey: ['settings'],
     queryFn: fetchSettings,
   })
 
@@ -73,18 +118,19 @@ export default function Settings() {
 
 
   // Update local state when config loads
+  // The server returns API keys masked (e.g. "sk-a••••x1z9"); a masked value
+  // sent back unchanged is ignored by the backend, so leaving a field alone is safe.
   React.useEffect(() => {
     if (config) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- form draft mirrors server state once it loads
       setGeminiKey(config.gemini_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAnthropicKey(config.anthropic_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setS2Key(config.s2_api_key || '')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setBudget(config.anthropic_budget_limit?.toString() || '5.0')
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setRerankingMode(config.reranking_mode || 'llm')
+      setZoteroAuto(!!config.zotero_auto_push)
+      setZoteroUserId(config.zotero_user_id || '')
+      setZoteroKey(config.zotero_api_key || '')
     }
   }, [config])
 
@@ -110,7 +156,7 @@ export default function Settings() {
         }
         
         try {
-          const { data } = await axios.get(`http://localhost:8001/follows/search_author?query=${encodeURIComponent(authorQuery)}`)
+          const { data } = await axios.get(`/follows/search_author?query=${encodeURIComponent(authorQuery)}`)
           const results = data || []
           // Sort results by paperCount descending
           results.sort((a: AuthorResult, b: AuthorResult) => (b.paperCount || 0) - (a.paperCount || 0))
@@ -128,21 +174,21 @@ export default function Settings() {
   }, [authorQuery])
 
   const createTopic = useMutation({
-    mutationFn: async (newTopic: Partial<Topic>) => {
-      return axios.post('http://localhost:8001/topics/', newTopic)
+    mutationFn: async (payload: ReturnType<typeof payloadFromDraft>) => {
+      return axios.post('/topics/', payload)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
-      setName('')
-      setDescription('')
-      setKeywords('')
+      queryClient.invalidateQueries({ queryKey: ['topicModels'] })
+      setDraft(emptyDraft)
       setIsCreating(false)
     },
+    onError: () => setIsCreating(false),
   })
 
   const deleteTopic = useMutation({
     mutationFn: async (topicId: string) => {
-      return axios.delete(`http://localhost:8001/topics/${topicId}`)
+      return axios.delete(`/topics/${topicId}`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -150,8 +196,8 @@ export default function Settings() {
   })
 
   const updateTopic = useMutation({
-    mutationFn: async ({ id, name, description, keywords }: { id: string, name: string, description: string, keywords: string }) => {
-      return axios.put(`http://localhost:8001/topics/${id}`, { name, description, keywords: keywords || undefined })
+    mutationFn: async ({ id, draft }: { id: string, draft: TopicDraft }) => {
+      return axios.put(`/topics/${id}`, payloadFromDraft(draft))
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] })
@@ -162,28 +208,30 @@ export default function Settings() {
     onError: (err) => {
       console.error(err)
       setIsUpdatingTopic(false)
-      alert("Failed to update topic. Did you forget to restart the backend terminal? (start.bat / start.sh)")
+      toast('Failed to update topic. Is the backend running?', { kind: 'error' })
     }
   })
 
-  const handleEditTopicSave = (id: string, name: string, description: string, keywords: string) => {
+  const handleEditTopicSave = (id: string, topicDraft: TopicDraft) => {
     setIsUpdatingTopic(true)
-    updateTopic.mutate({ id, name, description, keywords })
+    updateTopic.mutate({ id, draft: topicDraft })
   }
 
   const saveSettings = useMutation({
-    mutationFn: async (newSettings: { gemini_api_key?: string, anthropic_api_key?: string, s2_api_key?: string, anthropic_budget_limit?: number, enable_llm_reranking?: boolean }) => {
-      return axios.post('http://localhost:8001/settings/', newSettings)
+    mutationFn: async (newSettings: Partial<Omit<AppSettings, 'last_synced_at'>>) => {
+      return axios.post('/settings/', newSettings)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] })
       setIsSavingConfig(false)
-    }
+      toast('Settings saved', { kind: 'success' })
+    },
+    onError: () => { setIsSavingConfig(false); toast('Saving settings failed', { kind: 'error' }) },
   })
 
   const createFollow = useMutation({
     mutationFn: async (newFollow: Omit<Follow, 'id'>) => {
-      return axios.post('http://localhost:8001/follows/', newFollow)
+      return axios.post('/follows/', newFollow)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['follows'] })
@@ -192,7 +240,7 @@ export default function Settings() {
 
   const deleteFollow = useMutation({
     mutationFn: async (followId: string) => {
-      return axios.delete(`http://localhost:8001/follows/${followId}`)
+      return axios.delete(`/follows/${followId}`)
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['follows'] })
@@ -201,9 +249,19 @@ export default function Settings() {
 
   const handleCreateTopic = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name || !description) return
+    if (!draft.name || !draft.description) return
     setIsCreating(true)
-    createTopic.mutate({ name, description, keywords: keywords || undefined, priority: 1, is_active: true })
+    createTopic.mutate(payloadFromDraft(draft))
+  }
+
+  const describeModel = (m?: TopicModelStats) => {
+    if (!m) return 'No ranker yet'
+    const labels = (m.n_pos ?? 0) + (m.n_neg ?? 0)
+    if (!m.trained || labels === 0) return 'Ranker: description only (vote on papers to train it)'
+    const auc = m.cv_auc != null ? ` · accuracy (CV AUC) ${m.cv_auc.toFixed(2)}` : ' · too few votes to measure accuracy'
+    const when = m.trained_at ? ` · trained ${new Date(m.trained_at).toLocaleString()}` : ''
+    const busy = m.extra?.busy ? ' · rescoring…' : ''
+    return `Ranker trained on ${m.n_pos} positive / ${m.n_neg} negative votes${auc}${when}${busy}`
   }
 
   const handleSaveConfig = (e: React.FormEvent) => {
@@ -214,7 +272,10 @@ export default function Settings() {
       anthropic_api_key: anthropicKey,
       s2_api_key: s2Key,
       anthropic_budget_limit: parseFloat(budget),
-      reranking_mode: rerankingMode
+      reranking_mode: rerankingMode,
+      zotero_auto_push: zoteroAuto,
+      zotero_user_id: zoteroUserId,
+      zotero_api_key: zoteroKey,
     })
   }
 
@@ -231,13 +292,29 @@ export default function Settings() {
           <p>Loading topics...</p>
         ) : (
           <div className="space-y-4 mb-6">
-            {topics?.map((topic: Topic) => (
-              <div key={topic.id} className="flex justify-between items-center p-4 border rounded bg-background">
-                <div>
+            {topics?.map((topic: Topic, index: number) => (
+              <div key={topic.id} className="flex justify-between items-center p-4 border rounded bg-background gap-4">
+                <div className="flex flex-col gap-1 shrink-0">
+                  <button onClick={() => moveTopic(index, -1)} disabled={index === 0} className="w-6 h-6 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up">▲</button>
+                  <button onClick={() => moveTopic(index, 1)} disabled={index === (topics?.length ?? 0) - 1} className="w-6 h-6 rounded border border-border text-xs text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down">▼</button>
+                </div>
+                <div className="min-w-0 flex-1">
                   <h3 className="font-semibold">{topic.name}</h3>
                   <p className="text-sm text-muted-foreground">{topic.description}</p>
                   {topic.keywords && <p className="text-xs text-primary mt-1 font-semibold">Keywords: {topic.keywords}</p>}
+                  {topic.exclude_keywords && <p className="text-xs text-destructive mt-0.5 font-semibold">Excludes: {topic.exclude_keywords}</p>}
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {topic.seed_papers?.length ? `${topic.seed_papers.length} seed papers` : 'No seed papers (topic vector from description search)'}
+                    {' · '}{describeModel(topicModels?.[topic.id])}
+                  </p>
                 </div>
+                  <button 
+                    onClick={() => retrainTopic.mutate(topic.id)}
+                    className="text-muted-foreground hover:bg-muted px-3 py-1 rounded transition-colors mr-2 text-sm"
+                    title="Rebuild topic vector, retrain the ranker on your votes and rescore all papers"
+                  >
+                    Retrain
+                  </button>
                   <button 
                     onClick={() => {
                       setEditingTopic(topic)
@@ -259,46 +336,27 @@ export default function Settings() {
           </div>
         )}
 
+        {leaks && leaks.items > 0 && (
+          <div className="mb-6 border border-amber-300/60 bg-amber-50/60 dark:bg-amber-950/20 rounded-lg p-4 text-sm">
+            <p className="font-semibold mb-1">Votes copied across topics: {leaks.items} papers ({leaks.rows} rows)</p>
+            <p className="text-muted-foreground mb-3">Older versions wrote a vote made on the overview page to every topic the paper matched, so topics learned from each other's feedback. The repair keeps each of these votes only on the topic the paper fits best and retrains.</p>
+            <button onClick={() => repairVotes.mutate()} disabled={repairVotes.isPending} className="px-3 py-1.5 rounded bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50">
+              {repairVotes.isPending ? 'Repairing…' : 'Repair leaked votes'}
+            </button>
+          </div>
+        )}
+
         <div className="pt-4 border-t">
           <h3 className="font-semibold mb-4">Add New Topic</h3>
+          <div className="mb-4"><ZoteroImport onDraft={setDraft} /></div>
           <form onSubmit={handleCreateTopic} className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Topic Name</label>
-              <input 
-                type="text" 
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="e.g. Protein Design"
-                className="w-full p-2 rounded border bg-background"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Description</label>
-              <textarea 
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                placeholder="Describe what you want to track to help the semantic search. e.g. Generative AI for protein design, diffusion models, structure prediction."
-                className="w-full p-2 rounded border bg-background min-h-[100px]"
-                required
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Keywords (Optional)</label>
-              <input 
-                type="text" 
-                value={keywords}
-                onChange={e => setKeywords(e.target.value)}
-                placeholder="Comma separated keywords, e.g. CRISPR, Cas9, Gene Editing"
-                className="w-full p-2 rounded border bg-background"
-              />
-            </div>
+            <TopicForm draft={draft} onChange={setDraft} />
             <button 
               type="submit" 
               disabled={isCreating}
               className="bg-primary text-primary-foreground px-4 py-2 rounded font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
             >
-              {isCreating ? 'Adding Topic (Generating Embedding)...' : 'Add Topic'}
+              {isCreating ? 'Adding Topic...' : 'Add Topic'}
             </button>
           </form>
         </div>
@@ -461,7 +519,7 @@ export default function Settings() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">Monthly Budget Cap (USD)</label>
+            <label className="block text-sm font-medium mb-1">Monthly cloud LLM budget (USD) <span className="text-muted-foreground font-normal">· spent this month: ${(config?.llm_spend_this_month ?? 0).toFixed(3)}</span></label>
             <input 
               type="number" 
               step="0.5"
@@ -520,21 +578,102 @@ export default function Settings() {
       </div>
 
 
+      <div className="border rounded-lg p-6 bg-card shadow-sm">
+        <h2 className="text-xl font-semibold mb-2">Recent syncs</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Each fetch looks back to the last <em>complete</em> sync (at least 3, at most 30 days). A run with failed requests is marked partial and its period is fetched again next time, so a lost connection or a closed laptop never leaves a gap.
+          {config?.last_complete_sync_at && <> Last complete sync: {new Date(config.last_complete_sync_at).toLocaleString()}.</>}
+        </p>
+        {!syncRuns?.length ? (
+          <p className="text-sm text-muted-foreground italic">No syncs recorded yet.</p>
+        ) : (
+          <>
+          <div className="mb-3">
+            <button onClick={() => backfill.mutate(30)} disabled={backfill.isPending} className="text-xs px-2.5 py-1.5 rounded-md border border-border hover:bg-muted font-semibold" title="Fetch the last 30 days for all topics, e.g. after adding topics">Fetch the last 30 days</button>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="text-xs text-muted-foreground text-left">
+              <tr><th className="py-1 pr-3 font-medium">When</th><th className="py-1 pr-3 font-medium">Job</th><th className="py-1 pr-3 font-medium">Result</th><th className="py-1 pr-3 font-medium text-right">Window</th><th className="py-1 pr-3 font-medium text-right">New</th><th className="py-1 font-medium text-right">Errors</th></tr>
+            </thead>
+            <tbody>
+              {syncRuns.map(r => (
+                <Fragment key={r.id}>
+                <tr className="border-t border-border/60 cursor-pointer hover:bg-muted/40" title="Click for per-source details" onClick={() => setOpenRun(o => (o === r.id ? null : r.id))}>
+                  <td className="py-1.5 pr-3 whitespace-nowrap">{new Date(r.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+                  <td className="py-1.5 pr-3 truncate max-w-[16ch]">{r.job}</td>
+                  <td className={`py-1.5 pr-3 font-medium ${r.status === 'complete' ? 'text-emerald-600' : r.status === 'running' ? 'text-primary' : r.status === 'partial' ? 'text-amber-600' : 'text-red-600'}`}>{r.status}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.days_back ?? '–'} d</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.counters?.stored ?? '–'}</td>
+                  <td className="py-1.5 text-right tabular-nums">{r.errors}</td>
+                </tr>
+                {openRun === r.id && (
+                  <tr className="bg-muted/30">
+                    <td colSpan={6} className="px-3 py-3 text-xs">
+                      {r.counters?.sources ? (
+                        <table className="w-full mb-2">
+                          <thead className="text-muted-foreground text-left"><tr><th className="font-medium pr-3">Source</th><th className="font-medium pr-3 text-right">Returned</th><th className="font-medium pr-3 text-right">In date window</th><th className="font-medium text-right">Stored</th></tr></thead>
+                          <tbody>
+                            {Object.entries(r.counters.sources).map(([name, [returned, kept]]) => (
+                              <tr key={name} className={returned === 0 ? 'text-amber-600' : ''}>
+                                <td className="pr-3">{name}</td><td className="pr-3 text-right tabular-nums">{returned}</td><td className="pr-3 text-right tabular-nums">{kept}</td><td className="text-right tabular-nums">{r.counters.stored_by_source?.[name] ?? 0}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : <p className="text-muted-foreground mb-2">No per-source counts recorded for this run.</p>}
+                      <p className="text-muted-foreground">
+                        {r.counters?.discovered ?? 0} candidates · {r.counters?.new_candidates ?? 0} not yet known · {r.counters?.enriched ?? 0} with metadata in the window · {r.counters?.stored ?? 0} stored · {r.counters?.cleaned_up ?? 0} old papers removed
+                      </p>
+                      {r.message && <p className="mt-1 text-amber-700 dark:text-amber-400">{r.message}</p>}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+          </>
+        )}
+      </div>
+
+      <div className="border rounded-lg p-6 bg-card shadow-sm">
+        <h2 className="text-xl font-semibold mb-2">Zotero</h2>
+        <p className="text-sm text-muted-foreground mb-4">
+          Papers can be saved straight into the running Zotero desktop app (into the collection currently selected there), with the AI summary as a note. No API key needed.
+          {' '}Status: {zotero?.running ? <span className="text-emerald-600 font-semibold">Zotero is running</span> : <span className="text-muted-foreground">Zotero desktop not detected on this machine</span>}.
+        </p>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={zoteroAuto} onChange={e => setZoteroAuto(e.target.checked)} className="accent-primary" />
+          Automatically save every starred paper to Zotero
+        </label>
+        <div className="grid sm:grid-cols-2 gap-3 mt-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Zotero user ID <span className="text-muted-foreground font-normal">(optional)</span></label>
+            <input type="text" value={zoteroUserId} onChange={e => setZoteroUserId(e.target.value)} placeholder="e.g. 1234567" className="w-full p-2 rounded border bg-background" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Zotero API key <span className="text-muted-foreground font-normal">(read-only is enough)</span></label>
+            <input type="password" value={zoteroKey} onChange={e => setZoteroKey(e.target.value)} placeholder="from zotero.org/settings/keys" className="w-full p-2 rounded border bg-background" />
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground mt-2">User ID and key are only needed to read your library for topic import when the desktop app is not running on this machine. Saved together with the API keys below. The RSS feed (button in the inbox header) keeps working as a fallback.</p>
+      </div>
+
       <div className="border border-red-200 dark:border-red-900/50 rounded-lg p-6 bg-red-50/50 dark:bg-red-950/20 shadow-sm mt-8">
         <h2 className="text-xl font-semibold mb-2 text-red-700 dark:text-red-400">Data Management</h2>
         <p className="text-sm text-red-600/80 dark:text-red-400/80 mb-6">
-          Permanently delete all papers from your local database that are not explicitly starred. This action cannot be undone.
+          Permanently delete all papers from your local database that are neither starred nor voted on. Voted papers are kept because they train the ranking. This action cannot be undone.
         </p>
         
         <button 
           onClick={async () => {
-            if(window.confirm('Are you sure you want to delete all unstarred papers? This action cannot be undone.')) {
+            if(window.confirm('Delete all papers that are neither starred nor voted on? This action cannot be undone.')) {
               try {
-                const res = await axios.delete('http://localhost:8001/items/unstarred');
-                alert(`Successfully deleted ${res.data.deleted} unstarred papers.`);
+                const res = await axios.delete('/items/unstarred');
+                toast(`Deleted ${res.data.deleted} papers`, { kind: 'success' });
                 queryClient.invalidateQueries();
-              } catch (e) {
-                alert('Failed to clear unstarred papers.');
+              } catch {
+                toast('Failed to clear papers', { kind: 'error' });
               }
             }
           }}
@@ -544,6 +683,7 @@ export default function Settings() {
         </button>
       </div>
       <EditTopicModal 
+        key={editingTopic ? `${editingTopic.id}:${editingTopic.name}:${editingTopic.description}:${editingTopic.keywords ?? ''}` : 'none'}
         isOpen={isEditingModalOpen}
         onClose={() => setIsEditingModalOpen(false)}
         topic={editingTopic}

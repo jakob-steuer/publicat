@@ -17,7 +17,7 @@ export default function Help() {
             1. Using the Feed (Inbox Zero)
           </h2>
           <p className="text-foreground/80 mb-4 leading-relaxed">
-            Publicat uses a powerful voting system to help you quickly process new papers, while simultaneously teaching the AI your preferences.
+            The inbox is a ranked list. Move with <kbd className="px-1 border rounded font-mono text-xs">j</kbd>/<kbd className="px-1 border rounded font-mono text-xs">k</kbd>, open a paper with <kbd className="px-1 border rounded font-mono text-xs">Enter</kbd>, vote with <kbd className="px-1 border rounded font-mono text-xs">s</kbd> <kbd className="px-1 border rounded font-mono text-xs">u</kbd> <kbd className="px-1 border rounded font-mono text-xs">n</kbd> <kbd className="px-1 border rounded font-mono text-xs">d</kbd>, undo with <kbd className="px-1 border rounded font-mono text-xs">z</kbd>. Press <kbd className="px-1 border rounded font-mono text-xs">?</kbd> for the full list. Every vote trains the topic shown on the card, and only that topic.
           </p>
           <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
@@ -33,7 +33,7 @@ export default function Help() {
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <div className="text-2xl mb-2 text-blue-500">➖</div>
               <h3 className="font-semibold mb-1">Neutral (0)</h3>
-              <p className="text-sm text-muted-foreground">Mark as read. No effect on future scoring.</p>
+              <p className="text-sm text-muted-foreground">Clear it from the inbox. Counts as a slight "not for me", a quarter of an upvote, so use it freely for papers you cannot judge yet.</p>
             </div>
             <div className="bg-muted/30 border border-border/50 p-4 rounded-xl">
               <div className="text-2xl mb-2 text-red-500">👎</div>
@@ -60,10 +60,10 @@ export default function Help() {
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-5 mb-4">
             <h3 className="font-semibold text-primary mb-2">Continuous Active Learning 🧠</h3>
             <p className="text-sm text-foreground/80 mb-2">
-              Publicat features a dynamic reranking system. As you <strong>Star (⭐)</strong>, <strong>Upvote (👍)</strong>, or <strong>Downvote (👎)</strong> papers in your feed, Publicat calculates personalized "pro" and "anti" concept vectors.
+              Each topic has its own small ranking model. Before you vote it ranks by similarity to your <strong>seed papers</strong> (or to Semantic Scholar search results for the topic). Every <strong>Star</strong>, <strong>Upvote</strong>, <strong>Neutral</strong> or <strong>Downvote</strong> retrains that model within seconds and rescores the topic's papers.
             </p>
             <p className="text-sm text-foreground/80">
-              This means while a good initial topic definition is important, the AI will continuously develop, personalize, and improve its scoring based entirely on your personal reading preferences and rankings over time!
+              Click the score number on any paper to see why it scored the way it did. The Settings page shows how many votes each ranker has and its cross-validated accuracy; below roughly 30 votes it mostly follows the seed papers and keywords.
             </p>
           </div>
           <div className="bg-muted/30 border border-border/50 p-5 rounded-xl mb-4">
@@ -119,7 +119,7 @@ export default function Help() {
             <div className="space-y-3">
               <h3 className="font-semibold text-lg flex items-center gap-2">Export Citations</h3>
               <p className="text-sm text-foreground/80 leading-relaxed">
-                In your Starred Library, you can export all your saved papers as a JSON file, or copy their citations to share with colleagues or use in your manuscripts.
+                Select papers and use the bar at the bottom to export BibTeX or save them into the running Zotero desktop app with one click (the AI summary goes along as a note). The Starred Library can be exported as BibTeX in full.
               </p>
             </div>
           </div>

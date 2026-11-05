@@ -1,16 +1,12 @@
 from src.database import engine
-from src.models.base import Base
-from src.models.item import Item
-from src.models.item_score import ItemScore
-from src.models.topic import Topic
-from src.models.app_config import AppConfig
-from src.models.follow import Follow
-from src.models.rss import RssFeed
+from src.db_migrate import upgrade
+
 
 def init():
-    print("Creating database tables...")
-    Base.metadata.create_all(bind=engine)
-    print("Database tables created successfully!")
+    print("Creating / upgrading database schema...")
+    applied = upgrade(engine)
+    print(f"Schema ready. Added: {applied or 'nothing new'}")
+
 
 if __name__ == "__main__":
     init()

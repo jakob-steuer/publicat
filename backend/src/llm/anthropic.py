@@ -2,11 +2,23 @@ import json
 from anthropic import AsyncAnthropic
 from .base import LLMProvider
 
+def _text(response) -> str:
+    """Concatenate the text blocks; current models may return thinking blocks first."""
+    return "".join(block.text for block in response.content if getattr(block, "type", None) == "text")
+
+
 class AnthropicProvider(LLMProvider):
-    def __init__(self, api_key: str):
+    name = "anthropic"
+
+    def __init__(self, api_key: str, model: str = "claude-haiku-5-5"):
+        super().__init__()
         self.client = AsyncAnthropic(api_key=api_key)
-        self.model = "claude-3-5-haiku-latest"
-        
+        self.model = model
+
+    def _track(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        self.add_usage(getattr(usage, "input_tokens", 0), getattr(usage, "output_tokens", 0))
+
     async def summarize_brief(self, text: str, topic_desc: str) -> tuple[str, int]:
         prompt = f"""You are a scientific newsletter editor summarizing a paper for a researcher interested in: '{topic_desc}'.
 Write a highly concise, dry, and factual 2-3 sentence overview of the publication.
@@ -30,7 +42,8 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
             )
-            data = json.loads(response.content[0].text)
+            self._track(response)
+            data = json.loads(_text(response))
             return data.get("summary", ""), data.get("score", 5)
         except Exception as e:
             print(f"Anthropic Error: {e}")
@@ -61,9 +74,10 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}]
             )
+            self._track(response)
             
             # Anthropic doesn't have a strict JSON mode parameter natively exposed like Gemini, but it follows instructions well.
-            content = response.content[0].text
+            content = _text(response)
             # Simple parse to grab JSON block if it included markdown
             if "{" in content and "}" in content:
                 start = content.find("{")
@@ -95,7 +109,8 @@ Respond ONLY with a valid JSON object matching this schema:
                     {"role": "user", "content": prompt}
                 ]
             )
-            content = response.content[0].text
+            self._track(response)
+            content = _text(response)
             
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
@@ -131,7 +146,8 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=150,
                 messages=[{"role": "user", "content": prompt}]
             )
-            content = response.content[0].text
+            self._track(response)
+            content = _text(response)
             if "{" in content and "}" in content:
                 start = content.find("{")
                 end = content.rfind("}") + 1
@@ -150,7 +166,8 @@ Respond ONLY with a valid JSON object matching this schema:
                 max_tokens=300,
                 messages=[{"role": "user", "content": prompt}]
             )
-            return response.content[0].text
+            self._track(response)
+            return _text(response)
         except Exception as e:
             print(f"Anthropic generate error: {e}")
             return ""

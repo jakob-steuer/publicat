@@ -1,32 +1,48 @@
 import asyncio
-import httpx
-from typing import List, Dict, Any
 from datetime import datetime
+from typing import Any, Dict, List
+
+import httpx
+
+from src import jobs
 from src.config import settings
 from src.database import SessionLocal
 from src.models.app_config import AppConfig
 
-S2_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-S2_BATCH_URL = "https://api.semanticscholar.org/graph/v1/paper/batch"
-S2_AUTHOR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/author/search"
+S2_GRAPH = "https://api.semanticscholar.org/graph/v1"
+S2_SEARCH_URL = f"{S2_GRAPH}/paper/search"
+S2_BULK_SEARCH_URL = f"{S2_GRAPH}/paper/search/bulk"
+S2_BATCH_URL = f"{S2_GRAPH}/paper/batch"
+S2_AUTHOR_SEARCH_URL = f"{S2_GRAPH}/author/search"
+S2_AUTHOR_PAPERS_URL = f"{S2_GRAPH}/author/{{author_id}}/papers"
+S2_RECOMMEND_URL = "https://api.semanticscholar.org/recommendations/v1/papers"
 
-# To avoid blowing up S2 rate limits
+ID_FIELDS = "paperId,corpusId,externalIds,publicationDate,year"
+ENRICH_FIELDS = (
+    "paperId,corpusId,title,abstract,authors.authorId,authors.name,authors.externalIds,"
+    "year,publicationDate,venue,externalIds,url,openAccessPdf,isOpenAccess,citationCount,"
+    "referenceCount,influentialCitationCount,tldr,embedding.specter_v2,citationStyles"
+)
+
+# One request at a time: the free tier is rate limited globally.
 s2_semaphore = asyncio.Semaphore(1)
 
-async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str = "GET", params: dict = None, json_data: dict = None, retries: int = 3):
-    headers = {}
-    
-    # Try DB config first, fallback to env
+
+def _api_key() -> str | None:
     db = SessionLocal()
     try:
         conf = db.query(AppConfig).filter(AppConfig.key == "s2_api_key").first()
-        active_key = conf.value if conf and conf.value else settings.s2_api_key
+        return conf.value if conf and conf.value else settings.s2_api_key
     finally:
         db.close()
-        
-    if active_key:
-        headers["x-api-key"] = active_key
-        
+
+
+async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str = "GET", params: dict = None, json_data: dict = None, retries: int = 5):
+    headers = {}
+    key = _api_key()
+    if key:
+        headers["x-api-key"] = key
+
     for attempt in range(retries):
         async with s2_semaphore:
             try:
@@ -34,95 +50,150 @@ async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str 
                     response = await client.get(url, params=params, headers=headers, timeout=20.0)
                 else:
                     response = await client.post(url, params=params, json=json_data, headers=headers, timeout=30.0)
-                
                 if response.status_code == 429:
-                    await asyncio.sleep(2 ** attempt)
+                    wait = float(response.headers.get("Retry-After", 0) or 0) or min(2 ** (attempt + 1), 20)
+                    await asyncio.sleep(min(wait, 30))
                     continue
-                    
                 response.raise_for_status()
-                await asyncio.sleep(1.0) # Rate limit respect
-                return response.json()
+                await asyncio.sleep(1.0)  # rate-limit respect
+                # Batch responses carry 100 papers x 768-float embeddings (several MB of
+                # JSON); parse off the event loop so the UI does not stall.
+                return await asyncio.to_thread(response.json) if len(response.content) > 200_000 else response.json()
             except Exception as e:
-                print(f"S2 API Error on {url}: {e}")
-                await asyncio.sleep(2 ** attempt)
+                print(f"S2 API Error on {url}: {e}", flush=True)
+                await asyncio.sleep(min(2 ** (attempt + 1), 20))
+    jobs.note_error(f"Semantic Scholar request failed after {retries} attempts: {url.split('/v1/')[-1][:60]}")
     return None
 
-async def discover_new_papers_s2(topics: List[Any], since: datetime) -> List[Dict[str, str]]:
-    """
-    Search S2 for newly indexed papers matching the topics' keywords.
-    Returns a list of dicts with 'corpusId', 'paperId', 'doi'.
-    """
-    discovered = []
-    year_str = str(since.year)
-    
-    async with httpx.AsyncClient() as client:
-        for topic in topics:
-            # We use the topic name/description as the query. We'll simplify to just the name for broad search.
-            query = topic.name
-            
-            params = {
-                "query": query,
-                "year": f"{year_str}:",
-                "fields": "paperId,corpusId,externalIds,publicationDate,year",
-                "limit": 50
-            }
-            
-            data = await _fetch_s2_with_retry(client, S2_SEARCH_URL, method="GET", params=params)
-            if data and "data" in data:
-                for p in data["data"]:
-                    doi = p.get("externalIds", {}).get("DOI")
-                    discovered.append({
-                        "paperId": p.get("paperId"),
-                        "corpusId": str(p.get("corpusId")),
-                        "doi": doi
-                    })
-    
-    return discovered
 
-async def enrich_papers_s2(identifiers: List[str]) -> List[Dict[str, Any]]:
-    """
-    Batch request to S2 to fetch rich metadata.
-    `identifiers` can be a mix of CorpusIds or DOIs/arXiv IDs.
-    """
-    if not identifiers:
-        return []
-        
-    enriched = []
-    
-    fields = "paperId,corpusId,title,abstract,authors,year,publicationDate,venue,externalIds,url,openAccessPdf,isOpenAccess,citationCount,referenceCount,influentialCitationCount,tldr,embedding.specter_v2,citationStyles"
-    
-    # S2 batch accepts max 1000, but we do chunks of 100 to be safe
-    chunk_size = 100
-    
-    async with httpx.AsyncClient() as client:
-        for i in range(0, len(identifiers), chunk_size):
-            chunk = identifiers[i:i+chunk_size]
-            params = {"fields": fields}
-            json_data = {"ids": chunk}
-            
-            data = await _fetch_s2_with_retry(client, S2_BATCH_URL, method="POST", params=params, json_data=json_data)
-            if data:
-                enriched.extend(data)
-                
-    return enriched
+def _date_str(d: datetime) -> str:
+    return d.strftime("%Y-%m-%d")
 
-async def search_authors_s2(query: str) -> List[Dict[str, Any]]:
-    """
-    Search S2 for authors by name.
-    """
-    if not query:
-        return []
-        
-    results = []
+
+def _query_for_topic(topic: Any) -> str:
+    """Bulk-search query: the topic name plus each keyword as an OR'ed phrase."""
+    kws = [k.strip() for k in (topic.keywords or "").split(",") if k.strip()]
+    phrases = [f'"{topic.name}"'] + [f'"{k}"' for k in kws]
+    return " | ".join(phrases)
+
+
+async def search_papers_bulk_s2(client: httpx.AsyncClient, query: str, since: datetime, limit: int = 1000) -> List[Dict[str, Any]]:
+    """Newest papers matching a boolean query, published on/after `since`."""
     params = {
         "query": query,
-        "fields": "authorId,name,url,hIndex,paperCount,affiliations",
-        "limit": 10
+        "publicationDateOrYear": f"{_date_str(since)}:",
+        "sort": "publicationDate:desc",
+        "fields": ID_FIELDS,
     }
-    
+    data = await _fetch_s2_with_retry(client, S2_BULK_SEARCH_URL, params=params)
+    return (data or {}).get("data", [])[:limit]
+
+
+async def recommend_papers_s2(client: httpx.AsyncClient, positive_ids: List[str], negative_ids: List[str], limit: int = 100) -> List[Dict[str, Any]]:
+    """Semantic Scholar's recommender seeded with the user's starred/upvoted (and downvoted) papers."""
+    if not positive_ids:
+        return []
+    body = {"positivePaperIds": positive_ids[:100], "negativePaperIds": negative_ids[:100]}
+    data = await _fetch_s2_with_retry(client, S2_RECOMMEND_URL, method="POST", params={"fields": ID_FIELDS, "limit": limit}, json_data=body)
+    return (data or {}).get("recommendedPapers", [])
+
+
+async def author_papers_s2(client: httpx.AsyncClient, author_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    data = await _fetch_s2_with_retry(client, S2_AUTHOR_PAPERS_URL.format(author_id=author_id), params={"fields": ID_FIELDS, "limit": limit})
+    return (data or {}).get("data", [])
+
+
+def _published_after(paper: Dict[str, Any], since: datetime) -> bool:
+    date = paper.get("publicationDate")
+    if date:
+        try:
+            return datetime.strptime(date, "%Y-%m-%d") >= since.replace(tzinfo=None)
+        except ValueError:
+            pass
+    year = paper.get("year")
+    return year is None or year >= since.year
+
+
+async def discover_new_papers_s2(topics: List[Any], since: datetime, feedback: Dict[str, Dict[str, List[str]]] | None = None, author_ids: List[str] | None = None) -> List[Dict[str, Any]]:
+    """Discover candidate papers for all topics.
+
+    - date-sorted bulk search on each topic's name + keywords
+    - S2 recommendations seeded with each topic's positive/negative votes
+    - recent papers of followed authors (S2 author ids)
+    Returns dicts with paperId / corpusId / externalIds.
+    """
+    feedback = feedback or {}
+    discovered: Dict[str, Dict[str, Any]] = {}
+    stats: Dict[str, int] = {}
+
+    def add(source: str, papers, lane: str):
+        kept = 0
+        for p in papers:
+            if p and p.get("paperId") and _published_after(p, since):
+                kept += 1
+                entry = discovered.setdefault(p["paperId"], p)
+                entry.setdefault("_via", set()).add(lane)
+        stats[source] = stats.get(source, 0) + kept
+        jobs.count_source(lane, len(papers), kept)
+        print(f"  discovery/{source}: {len(papers)} returned, {kept} within window", flush=True)
+
     async with httpx.AsyncClient() as client:
-        data = await _fetch_s2_with_retry(client, S2_AUTHOR_SEARCH_URL, method="GET", params=params)
-        if data and "data" in data:
-            results = data["data"]
-            
-    return results
+        for topic in topics:
+            if jobs.aborted():
+                break
+            add(f"search[{topic.name[:24]}]", await search_papers_bulk_s2(client, _query_for_topic(topic), since), "S2 search")
+            fb = feedback.get(topic.id) or {}
+            if fb.get("positive"):
+                add(f"recommend[{topic.name[:24]}]", await recommend_papers_s2(client, fb["positive"], fb.get("negative", [])), "S2 recommendations")
+        for author_id in author_ids or []:
+            if jobs.aborted():
+                break
+            add(f"author[{author_id}]", await author_papers_s2(client, author_id), "followed author")
+    print(f"  discovery/S2 total unique: {len(discovered)}", flush=True)
+    return list(discovered.values())
+
+
+async def search_papers_s2(query: str, limit: int = 10, fields: str = "paperId,title,year,venue,authors.name,externalIds") -> List[Dict[str, Any]]:
+    """Relevance-ranked paper search (seed-paper picker, cold-start topic vector)."""
+    if not query:
+        return []
+    async with httpx.AsyncClient() as client:
+        data = await _fetch_s2_with_retry(client, S2_SEARCH_URL, params={"query": query, "fields": fields, "limit": limit})
+    return (data or {}).get("data", [])
+
+
+async def enrich_papers_s2(identifiers: List[str]) -> List[Dict[str, Any]]:
+    """Batch request for rich metadata. `identifiers` may mix paperIds, CorpusId:, DOI:, ARXIV: ids."""
+    if not identifiers:
+        return []
+    enriched = []
+    chunk_size = 100  # the endpoint allows 500, smaller chunks keep responses manageable
+    async with httpx.AsyncClient() as client:
+        for i in range(0, len(identifiers), chunk_size):
+            if jobs.aborted():
+                break
+            jobs.set_progress(40 + int(15 * i / max(1, len(identifiers))), f"Enriching papers via Semantic Scholar ({i}/{len(identifiers)})...")
+            chunk = identifiers[i : i + chunk_size]
+            data = await _fetch_s2_with_retry(client, S2_BATCH_URL, method="POST", params={"fields": ENRICH_FIELDS}, json_data={"ids": chunk})
+            if data:
+                enriched.extend(p for p in data if p)
+    return enriched
+
+
+async def lookup_papers_s2(identifiers: List[str], fields: str = "paperId,title,year") -> List[Dict[str, Any] | None]:
+    """Resolve DOI:/ARXIV:/PMID: identifiers to papers; the result is aligned with the input (None = unknown)."""
+    out: List[Dict[str, Any] | None] = []
+    async with httpx.AsyncClient() as client:
+        for i in range(0, len(identifiers), 100):
+            chunk = identifiers[i : i + 100]
+            data = await _fetch_s2_with_retry(client, S2_BATCH_URL, method="POST", params={"fields": fields}, json_data={"ids": chunk})
+            out.extend(data if isinstance(data, list) and len(data) == len(chunk) else [None] * len(chunk))
+    return out
+
+
+async def search_authors_s2(query: str) -> List[Dict[str, Any]]:
+    if not query:
+        return []
+    async with httpx.AsyncClient() as client:
+        data = await _fetch_s2_with_retry(client, S2_AUTHOR_SEARCH_URL, params={"query": query, "fields": "authorId,name,url,hIndex,paperCount,affiliations", "limit": 10})
+    return (data or {}).get("data", [])

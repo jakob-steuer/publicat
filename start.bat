@@ -36,7 +36,7 @@ echo [INFO] Syncing backend dependencies...
 cd backend
 
 :: uv sync will automatically download Python if it's not installed!
-uv sync
+uv sync --extra local
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to install dependencies. Check your internet connection.
     pause

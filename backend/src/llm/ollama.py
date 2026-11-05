@@ -3,9 +3,16 @@ import httpx
 from .base import LLMProvider
 
 class OllamaProvider(LLMProvider):
-    def __init__(self, host: str = "http://localhost:11434"):
+    name = "ollama"
+    is_cloud = False
+
+    def __init__(self, host: str = "http://localhost:11434", model: str = "llama3"):
+        super().__init__()
         self.host = host
-        self.model = "llama3" # Assuming llama3 is pulled locally
+        self.model = model
+
+    def _track(self, payload: dict) -> None:
+        self.add_usage(payload.get("prompt_eval_count", 0), payload.get("eval_count", 0))
         
     async def summarize_brief(self, text: str, topic_desc: str) -> tuple[str, int]:
         prompt = f"""You are a scientific newsletter editor summarizing a paper for a researcher interested in: '{topic_desc}'.
@@ -37,6 +44,7 @@ Respond ONLY with a valid JSON object matching this schema, nothing else:
                     timeout=60.0
                 )
                 response.raise_for_status()
+                self._track(response.json())
                 data = json.loads(response.json()["response"])
                 return data.get("summary", ""), data.get("score", 5)
         except httpx.HTTPStatusError as e:
@@ -78,6 +86,7 @@ Respond ONLY with a valid JSON object matching this schema:
                     timeout=60.0
                 )
                 response.raise_for_status()
+                self._track(response.json())
                 data = json.loads(response.json()["response"])
                 return data.get("summary", ""), data.get("tools", [])
         except httpx.HTTPStatusError as e:
@@ -110,6 +119,7 @@ Respond ONLY with a valid JSON object matching this schema:
                     timeout=60.0
                 )
                 response.raise_for_status()
+                self._track(response.json())
                 data = json.loads(response.json()["response"])
                 return data.get("tools", [])
         except httpx.HTTPStatusError as e:
@@ -145,6 +155,7 @@ Respond ONLY with a valid JSON object matching this schema:
                     timeout=30.0
                 )
                 response.raise_for_status()
+                self._track(response.json())
                 data = json.loads(response.json()["response"])
                 return data.get("score", 0), data.get("reason", "No reason provided.")
         except Exception as e:
@@ -164,6 +175,7 @@ Respond ONLY with a valid JSON object matching this schema:
                     timeout=60.0
                 )
                 response.raise_for_status()
+                self._track(response.json())
                 return response.json()["response"]
         except Exception as e:
             print(f"Ollama Error: {e}")

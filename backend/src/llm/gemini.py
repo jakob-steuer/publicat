@@ -4,9 +4,16 @@ from google.genai import types
 from .base import LLMProvider
 
 class GeminiProvider(LLMProvider):
+    name = "gemini"
+
     def __init__(self, api_key: str):
+        super().__init__()
         self.client = genai.Client(api_key=api_key)
         self.model = "gemini-2.5-flash"
+
+    def _track(self, response) -> None:
+        meta = getattr(response, "usage_metadata", None)
+        self.add_usage(getattr(meta, "prompt_token_count", 0), getattr(meta, "candidates_token_count", 0))
         
     async def summarize_brief(self, text: str, topic_desc: str) -> tuple[str, int]:
         prompt = f"""You are a scientific newsletter editor summarizing a paper for a researcher interested in: '{topic_desc}'.
@@ -26,13 +33,14 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"summary": "...", "score": 8}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 ),
             )
+            self._track(response)
             data = json.loads(response.text)
             return data.get("summary", ""), data.get("score", 5)
         except Exception as e:
@@ -59,13 +67,14 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"summary": "...", "tools": ["Tool1", "Tool2"]}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 ),
             )
+            self._track(response)
             data = json.loads(response.text)
             return data.get("summary", ""), data.get("tools", [])
         except Exception as e:
@@ -83,13 +92,14 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"tools": ["Keyword1", "Keyword2"]}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 ),
             )
+            self._track(response)
             data = json.loads(response.text)
             return data.get("tools", [])
         except Exception as e:
@@ -110,13 +120,14 @@ Respond ONLY with a valid JSON object matching this schema:
 {{"score": 85, "reason": "The paper directly addresses the topic by investigating..."}}
 """
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                 ),
             )
+            self._track(response)
             data = json.loads(response.text)
             return data.get("score", 0), data.get("reason", "No reason provided.")
         except Exception as e:
@@ -125,10 +136,11 @@ Respond ONLY with a valid JSON object matching this schema:
 
     async def generate(self, prompt: str) -> str:
         try:
-            response = self.client.models.generate_content(
+            response = await self.client.aio.models.generate_content(
                 model=self.model,
                 contents=prompt,
             )
+            self._track(response)
             return response.text
         except Exception as e:
             print(f"Gemini Error: {e}")

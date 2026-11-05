@@ -27,7 +27,7 @@ fi
 # Sync backend dependencies via uv
 echo "[INFO] Syncing backend dependencies..."
 cd backend
-uv sync
+uv sync --extra local
 cd ..
 
 # Launch the app using uv's managed python

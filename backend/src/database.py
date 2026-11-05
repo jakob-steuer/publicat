@@ -18,6 +18,8 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA busy_timeout=30000")
+        # item_scores declares ON DELETE CASCADE; SQLite only honours it with this on.
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

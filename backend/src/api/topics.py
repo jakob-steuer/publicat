@@ -1,264 +1,244 @@
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+import asyncio
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.database import get_db
+from src import jobs
+from src.database import SessionLocal, get_db
+from src.models.item_score import ItemScore
 from src.models.topic import Topic
-from src.schemas.topic import TopicCreate, TopicUpdate, TopicResponse
-from src.embeddings import get_embedding
+from src.models.topic_model import TopicModel
+from src.ranking.paper import load_follows
+from src.ranking.topic_vector import build_prior_vector
+from src.ranking.training import is_busy, mark_busy, rescore_topic, train_topic
+from src.schemas.topic import TopicCreate, TopicModelStats, TopicResponse, TopicUpdate
+from src.sources.semantic_scholar import search_papers_s2
 
 router = APIRouter(prefix="/topics", tags=["topics"])
 
+
+def _topic_text(name: str, description: str, keywords: Optional[str]) -> str:
+    text = f"{name}. {description}"
+    if keywords:
+        text += f". Keywords: {keywords}"
+    return text
+
+
+def _local_embedding(text: str) -> Optional[list]:
+    """Legacy local SPECTER2 topic vector. Opt-in (PUBLICAT_LOCAL_EMBEDDINGS=1): the
+    Semantic Scholar-space prior vector replaced it, and loading PyTorch inside a
+    request stalls the API for seconds."""
+    from src.api.items import local_embeddings_enabled
+
+    if not local_embeddings_enabled():
+        return None
+    try:
+        from src.embeddings import get_embedding
+
+        return get_embedding(text)
+    except Exception as e:
+        print(f"Local topic embedding skipped: {e}", flush=True)
+        return None
+
+
+def _response(topic: Topic) -> dict:
+    d = {c.name: getattr(topic, c.name) for c in Topic.__table__.columns if c.name not in ("embedding", "prior_vector")}
+    d["has_prior_vector"] = bool(topic.prior_vector or topic.embedding)
+    return d
+
+
+async def prepare_topic(topic_id: str, rescore_all: bool, then_sync_days: Optional[int] = None) -> None:
+    """Background: build the S2-space topic vector, train, rescore, optionally fetch."""
+    db = SessionLocal()
+    try:
+        topic = db.get(Topic, topic_id)
+        if not topic:
+            return
+        vector, source = await build_prior_vector(topic)
+        if vector is not None:
+            topic.prior_vector = vector
+            db.commit()
+        print(f"Topic '{topic.name}': prior vector from {source}", flush=True)
+
+        def train_and_rescore():
+            mark_busy(topic_id, True)
+            try:
+                follows = load_follows(db)
+                model = train_topic(db, topic, follows)
+                n = rescore_topic(db, topic, model, follows, all_items=rescore_all)
+                print(f"Topic '{topic.name}': scored {n} papers (CV AUC {model.cv_auc})", flush=True)
+            finally:
+                mark_busy(topic_id, False)
+
+        await asyncio.to_thread(train_and_rescore)
+
+        if then_sync_days:
+            from src.api.items import full_sync
+
+            if not await full_sync(db, days_back=then_sync_days, name=f"initial fetch for '{topic.name}'"):
+                jobs.request_backfill(then_sync_days)
+                print(f"Initial fetch for '{topic.name}' queued: it runs as soon as the current job finishes.", flush=True)
+    except Exception as e:
+        print(f"prepare_topic failed for {topic_id}: {e!r}", flush=True)
+    finally:
+        db.close()
+
+
 @router.post("/", response_model=TopicResponse)
 def create_topic(topic_in: TopicCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    # Generate embedding for the new topic
-    text_to_embed = f"{topic_in.name}. {topic_in.description}"
-    if topic_in.keywords:
-        text_to_embed += f". Keywords: {topic_in.keywords}"
-    embedding = get_embedding(text_to_embed)
-    
+    data = topic_in.model_dump()
+    data["seed_papers"] = [s for s in (data.get("seed_papers") or [])] or None
+    data["priority"] = (db.query(func.max(Topic.priority)).scalar() or 0) + 1
     db_topic = Topic(
-        **topic_in.model_dump(),
-        embedding=embedding,
-        user_id="1" # Hardcoded for single-user MVP
+        **data,
+        embedding=_local_embedding(_topic_text(topic_in.name, topic_in.description, topic_in.keywords)),
+        user_id="1",  # single-user MVP
     )
     db.add(db_topic)
     db.commit()
     db.refresh(db_topic)
-    
-    # Backfill scores for existing items
-    from src.models.item import Item
-    from src.models.item_score import ItemScore
-    from src.models.follow import Follow
-    from src.embeddings import compute_cosine_similarity
-    
-    items = db.query(Item).all()
-    follows = db.query(Follow).all()
-    author_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "author"}
-    venue_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "venue"}
-    
-    for item in items:
-        if item.embedding:
-            item_emb = item.embedding
-        else:
-            item_text = f"{item.title}. {item.abstract}"
-            item_emb = get_embedding(item_text)
-            
-        raw_sim = compute_cosine_similarity(item_emb, embedding)
-        # Calibrate Specter V2 embeddings: random papers ~0.72, highly related ~0.88+
-        sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
-        
-        boost = 0.0
-        reasons = []
-        item_authors = [a.lower() for a in item.authors] if item.authors else []
-        for author, boost_val in author_follows.items():
-            if any(author in a for a in item_authors):
-                boost += boost_val
-                reasons.append(f"Followed author boost (+{boost_val})")
-                
-        if item.venue:
-            item_venue = item.venue.lower()
-            for venue, boost_val in venue_follows.items():
-                if venue in item_venue:
-                    boost += boost_val
-                    reasons.append(f"Followed venue boost (+{boost_val})")
-                    
-        # Topic-specific Keyword Boosting
-        topic_boost = 0.0
-        topic_specific_reasons = []
-        if db_topic.keywords:
-            kws = [k.strip().lower() for k in db_topic.keywords.split(",")]
-            paper_title = item.title.lower() if item.title else ""
-            paper_abs = item.abstract.lower() if item.abstract else ""
-            for kw in kws:
-                if not kw: continue
-                # allow singular/plural loose matching
-                kw_base = kw[:-1] if kw.endswith('s') else kw
-                
-                if kw_base in paper_title:
-                    topic_boost += 0.15
-                    topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
-                elif kw_base in paper_abs:
-                    topic_boost += 0.10
-                    topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
+    background_tasks.add_task(prepare_topic, db_topic.id, True, 30)
+    return _response(db_topic)
 
-        final_score = min(1.0, sim + boost + topic_boost)
-        
-        # Only add score if it passes the threshold, same as items.py
-        if final_score >= 0.20 or boost > 0.0 or topic_boost > 0.0:
-            combined_reasons = [f"Semantic match to '{db_topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
-            
-            score = ItemScore(
-                item_id=item.id,
-                topic_id=db_topic.id,
-                semantic_score=sim,
-                final_score=final_score,
-                reasons=combined_reasons
-            )
-            db.add(score)
-    db.commit()
-    
-    # Run a full ingest and summarization pipeline for the last 2 months automatically
-    from src.api.items import run_ingestion
-    from src.llm.pipeline import run_summarization_pipeline
-    from src.database import SessionLocal
-    
-    async def init_topic_task():
-        from src.api.items import sync_state
-        db_bg = SessionLocal()
-        try:
-            print(f"Starting 30-day ingestion for new topic: {db_topic.name}...")
-            await run_ingestion(db_bg, days_back=30)
-            
-            if sync_state["status"] == "aborted":
-                sync_state["status"] = "idle"
-                sync_state["progress"] = 0
-                sync_state["message"] = "Sync Aborted"
-                return
-
-            print("Ingestion complete. Running summarization pipeline...")
-            await run_summarization_pipeline(db_bg)
-            
-            if sync_state["status"] == "aborted":
-                sync_state["status"] = "idle"
-                sync_state["progress"] = 0
-                sync_state["message"] = "Sync Aborted"
-                return
-
-            print("Pipeline complete!")
-            sync_state["status"] = "idle"
-            sync_state["message"] = "Sync Complete!"
-            sync_state["progress"] = 100
-        except Exception as e:
-            sync_state["status"] = "error"
-            sync_state["message"] = f"Error during sync: {e}"
-        finally:
-            db_bg.close()
-            
-    background_tasks.add_task(init_topic_task)
-    
-    return db_topic
 
 @router.get("/", response_model=List[TopicResponse])
 def read_topics(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    topics = db.query(Topic).filter(Topic.user_id == "1").offset(skip).limit(limit).all()
-    return topics
+    q = db.query(Topic).filter(Topic.user_id == "1").order_by(Topic.priority, Topic.created_at)
+    return [_response(t) for t in q.offset(skip).limit(limit).all()]
+
+
+class TopicOrder(BaseModel):
+    ids: List[str]
+
+
+@router.put("/order", response_model=List[TopicResponse])
+def reorder_topics(order: TopicOrder, db: Session = Depends(get_db)):
+    """Set the display order of topics (sidebar, settings). Unknown ids are ignored."""
+    topics = {t.id: t for t in db.query(Topic).filter(Topic.user_id == "1").all()}
+    position = 0
+    for tid in order.ids:
+        if tid in topics:
+            topics.pop(tid).priority = position
+            position += 1
+    for t in sorted(topics.values(), key=lambda t: (t.priority or 0, t.created_at)):  # not mentioned: keep after
+        t.priority = position
+        position += 1
+    db.commit()
+    return read_topics(db=db)
+
+
+@router.get("/models", response_model=Dict[str, TopicModelStats])
+def read_models(db: Session = Depends(get_db)):
+    """Training state of every topic's ranker (for the topic settings page)."""
+    out = {}
+    for topic in db.query(Topic).filter(Topic.user_id == "1").all():
+        row = db.get(TopicModel, topic.id)
+        out[topic.id] = TopicModelStats(
+            topic_id=topic.id,
+            trained=bool(row and row.payload.get("trained_at")),
+            n_pos=row.n_pos if row else 0,
+            n_neg=row.n_neg if row else 0,
+            cv_auc=row.cv_auc if row else None,
+            trained_at=row.trained_at if row else None,
+            prior_source="seeds" if topic.seed_papers else ("s2_search" if topic.prior_vector else ("local" if topic.embedding else None)),
+            extra={
+                "labels": db.query(ItemScore).filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None)).count(),
+                "busy": is_busy(topic.id),
+            },
+        )
+    return out
+
+
+def _leaked_items(db: Session) -> dict[str, list[ItemScore]]:
+    """Items whose identical vote was written to several topics by the old overview voting.
+
+    Signature: >= 2 voted rows for the item, all carrying the same vote.
+    """
+    rows = db.query(ItemScore).filter(ItemScore.user_vote.isnot(None)).all()
+    by_item: dict[str, list[ItemScore]] = {}
+    for s in rows:
+        by_item.setdefault(s.item_id, []).append(s)
+    return {iid: ss for iid, ss in by_item.items() if len(ss) >= 2 and len({x.user_vote for x in ss}) == 1}
+
+
+@router.get("/vote_leaks", response_model=dict)
+def vote_leaks(db: Session = Depends(get_db)):
+    leaked = _leaked_items(db)
+    return {"items": len(leaked), "rows": sum(len(v) for v in leaked.values())}
+
+
+@router.post("/repair_votes", response_model=dict)
+def repair_votes(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Keep each leaked vote only on the topic it fits best (highest description score), clear the copies, retrain."""
+    leaked = _leaked_items(db)
+    cleared = 0
+    touched: set[str] = set()
+    for scores in leaked.values():
+        keep = max(scores, key=lambda s: (s.semantic_score or 0.0, s.final_score or 0.0))
+        for s in scores:
+            touched.add(s.topic_id)
+            if s is not keep:
+                s.user_vote = None
+                s.voted_at = None
+                cleared += 1
+    db.commit()
+    for topic_id in touched:
+        background_tasks.add_task(prepare_topic, topic_id, False, None)
+    return {"status": "success", "items": len(leaked), "cleared_rows": cleared, "retraining_topics": len(touched)}
+
+
+@router.get("/search_papers", response_model=List[Dict[str, Any]])
+async def search_papers(q: str, limit: int = 8):
+    """Semantic Scholar search for picking seed papers."""
+    results = await search_papers_s2(q, limit=limit)
+    return [
+        {
+            "paperId": r.get("paperId"),
+            "title": r.get("title"),
+            "year": r.get("year"),
+            "venue": r.get("venue"),
+            "authors": [a.get("name") for a in (r.get("authors") or [])][:4],
+        }
+        for r in results
+        if r.get("paperId")
+    ]
+
 
 @router.put("/{topic_id}", response_model=TopicResponse)
 def update_topic(topic_id: str, topic_in: TopicUpdate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     topic = db.query(Topic).filter(Topic.id == topic_id, Topic.user_id == "1").first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
-        
-    # Update fields
-    if topic_in.name is not None:
-        topic.name = topic_in.name
-    if topic_in.description is not None:
-        topic.description = topic_in.description
-    if topic_in.keywords is not None:
-        topic.keywords = topic_in.keywords
-        
-    # Generate new embedding
-    text_to_embed = f"{topic.name}. {topic.description}"
-    if topic.keywords:
-        text_to_embed += f". Keywords: {topic.keywords}"
-    topic.embedding = get_embedding(text_to_embed)
-    
+
+    changes = topic_in.model_dump(exclude_unset=True)
+    for key, value in changes.items():
+        setattr(topic, key, value)
+    if any(k in changes for k in ("name", "description", "keywords")):
+        topic.embedding = _local_embedding(_topic_text(topic.name, topic.description, topic.keywords))
     db.commit()
     db.refresh(topic)
-    
-    # Background task to rescore all existing items against the updated topic
-    def rescore_topic_task(t_id: str):
-        from src.database import SessionLocal
-        from src.models.item import Item
-        from src.models.item_score import ItemScore
-        from src.models.follow import Follow
-        from src.embeddings import compute_cosine_similarity
-        
-        db_bg = SessionLocal()
-        try:
-            db_topic = db_bg.query(Topic).filter(Topic.id == t_id).first()
-            if not db_topic:
-                return
-                
-            # Clear old scores for this topic
-            db_bg.query(ItemScore).filter(ItemScore.topic_id == t_id).delete()
-            db_bg.commit()
-            
-            items = db_bg.query(Item).all()
-            follows = db_bg.query(Follow).all()
-            author_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "author"}
-            venue_follows = {f.entity_value.lower(): f.boost_value for f in follows if f.entity_type == "venue"}
-            
-            for item in items:
-                if item.embedding:
-                    item_emb = item.embedding
-                else:
-                    item_text = f"{item.title}. {item.abstract}"
-                    item_emb = get_embedding(item_text)
-                    
-                raw_sim = compute_cosine_similarity(item_emb, db_topic.embedding)
-                sim = max(0.0, min(1.0, (raw_sim - 0.72) * 5.0))
-                
-                boost = 0.0
-                reasons = []
-                item_authors = [a.lower() for a in item.authors] if item.authors else []
-                for author, boost_val in author_follows.items():
-                    if any(author in a for a in item_authors):
-                        boost += boost_val
-                        reasons.append(f"Followed author boost (+{boost_val})")
-                        
-                if item.venue:
-                    item_venue = item.venue.lower()
-                    for venue, boost_val in venue_follows.items():
-                        if venue in item_venue:
-                            boost += boost_val
-                            reasons.append(f"Followed venue boost (+{boost_val})")
-                            
-                topic_boost = 0.0
-                topic_specific_reasons = []
-                if db_topic.keywords:
-                    kws = [k.strip().lower() for k in db_topic.keywords.split(",")]
-                    paper_title = item.title.lower() if item.title else ""
-                    paper_abs = item.abstract.lower() if item.abstract else ""
-                    for kw in kws:
-                        if not kw: continue
-                        kw_base = kw[:-1] if kw.endswith('s') else kw
-                        if kw_base in paper_title:
-                            topic_boost += 0.15
-                            topic_specific_reasons.append(f"Keyword in title ('{kw}', +0.15)")
-                        elif kw_base in paper_abs:
-                            topic_boost += 0.10
-                            topic_specific_reasons.append(f"Keyword in abstract ('{kw}', +0.10)")
+    background_tasks.add_task(prepare_topic, topic.id, True, None)
+    return _response(topic)
 
-                final_score = min(1.0, sim + boost + topic_boost)
-                
-                if final_score >= 0.20 or boost > 0.0 or topic_boost > 0.0:
-                    combined_reasons = [f"Semantic match to '{db_topic.name}' ({sim:.2f})"] + reasons + topic_specific_reasons
-                    score = ItemScore(
-                        item_id=item.id,
-                        topic_id=db_topic.id,
-                        semantic_score=sim,
-                        final_score=final_score,
-                        reasons=combined_reasons
-                    )
-                    db_bg.add(score)
-            db_bg.commit()
-            print(f"Rescoring for topic {db_topic.name} complete!")
-        except Exception as e:
-            print(f"Error rescoring topic {t_id}: {e}")
-        finally:
-            db_bg.close()
 
-    background_tasks.add_task(rescore_topic_task, topic.id)
-    return topic
+@router.post("/{topic_id}/retrain", response_model=dict)
+def retrain(topic_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    if not db.get(Topic, topic_id):
+        raise HTTPException(status_code=404, detail="Topic not found")
+    background_tasks.add_task(prepare_topic, topic_id, True, None)
+    return {"status": "scheduled"}
+
 
 @router.delete("/{topic_id}")
 def delete_topic(topic_id: str, db: Session = Depends(get_db)):
     topic = db.query(Topic).filter(Topic.id == topic_id, Topic.user_id == "1").first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
-    
+    db.query(ItemScore).filter(ItemScore.topic_id == topic_id).delete(synchronize_session=False)
+    db.query(TopicModel).filter(TopicModel.topic_id == topic_id).delete(synchronize_session=False)
     db.delete(topic)
     db.commit()
     return {"status": "success"}
