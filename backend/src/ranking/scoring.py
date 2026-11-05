@@ -28,10 +28,12 @@ class TopicScore:
     final_score: float  # learned probability
     reasons: list[str]
     excluded: bool = False  # hit an exclude keyword
-    has_signal: bool = False  # keyword / followed author / journal hit
+    has_signal: bool = False  # by a followed author
 
     @property
     def keep(self) -> bool:
+        # Keyword hits already raise the score through their weights; a generic keyword
+        # ("protein") must not force thousands of irrelevant papers into the database.
         return not self.excluded and (self.final_score >= MIN_SCORE_TO_KEEP or self.has_signal)
 
 
@@ -55,7 +57,7 @@ def score_against_topic(
     if hits:
         return TopicScore(topic.id, 0.0, 0.0, [f"Excluded: mentions {', '.join(repr(h) for h in hits)}"], excluded=True)
     p, prior_p, reasons = model.score_row(row)
-    has_signal = bool(row.details["title_hits"] or row.details["abstract_hits"] or row.details["authors"] or row.details["journal"])
+    has_signal = bool(row.details["authors"])
     return TopicScore(topic.id, prior_p, p, reasons, has_signal=has_signal)
 
 

@@ -37,7 +37,7 @@ def _api_key() -> str | None:
         db.close()
 
 
-async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str = "GET", params: dict = None, json_data: dict = None, retries: int = 3):
+async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str = "GET", params: dict = None, json_data: dict = None, retries: int = 5):
     headers = {}
     key = _api_key()
     if key:
@@ -51,7 +51,8 @@ async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str 
                 else:
                     response = await client.post(url, params=params, json=json_data, headers=headers, timeout=30.0)
                 if response.status_code == 429:
-                    await asyncio.sleep(2**attempt)
+                    wait = float(response.headers.get("Retry-After", 0) or 0) or min(2 ** (attempt + 1), 20)
+                    await asyncio.sleep(min(wait, 30))
                     continue
                 response.raise_for_status()
                 await asyncio.sleep(1.0)  # rate-limit respect
@@ -59,8 +60,8 @@ async def _fetch_s2_with_retry(client: httpx.AsyncClient, url: str, method: str 
                 # JSON); parse off the event loop so the UI does not stall.
                 return await asyncio.to_thread(response.json) if len(response.content) > 200_000 else response.json()
             except Exception as e:
-                print(f"S2 API Error on {url}: {e}")
-                await asyncio.sleep(2**attempt)
+                print(f"S2 API Error on {url}: {e}", flush=True)
+                await asyncio.sleep(min(2 ** (attempt + 1), 20))
     jobs.note_error(f"Semantic Scholar request failed after {retries} attempts: {url.split('/v1/')[-1][:60]}")
     return None
 

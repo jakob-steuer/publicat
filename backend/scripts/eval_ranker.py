@@ -29,7 +29,8 @@ from src.models.item_score import ItemScore  # noqa: E402
 from src.models.topic import Topic  # noqa: E402
 from src.ranking.model import RankerModel, auc, cross_validated_auc  # noqa: E402
 from src.ranking.paper import load_follows  # noqa: E402
-from src.ranking.training import background_cos_stats, background_examples, labeled_examples, regularisation_for  # noqa: E402
+from src.ranking import training  # noqa: E402
+from src.ranking.training import background_cos_stats, labeled_examples, regularisation_for, training_extras  # noqa: E402
 
 LAMBDAS = [0.03, 0.1, 0.3, 1.0]
 NETWORK = "--no-network" not in sys.argv
@@ -57,7 +58,7 @@ def main():
 
     for topic in topics:
         E, S, y, w = labeled_examples(db, topic, follows)
-        background = background_examples(db, topic, follows, float(w.sum()))  # train-only pseudo-negatives, as in production
+        background = training.background_examples(db, topic, follows, float(w.sum()))  # train-only pseudo-negatives
         stored = [
             s.final_score
             for s in db.query(ItemScore).filter(ItemScore.topic_id == topic.id, ItemScore.user_vote.isnot(None)).all()
@@ -84,10 +85,21 @@ def main():
                 print(f"  [{name}] learned, lambda={lam:<4}                 CV AUC {cv:.3f}")
         prod_prior = s2_priors.get(topic.id) or topic.embedding
         if prod_prior is not None:
-            st = background_cos_stats(db, prod_prior)
+            # exactly what production does: calibrated prior, centre, background negatives, seed anchor
+            topic.prior_vector = prod_prior  # in memory only, never committed
+            base = training.prior_model(db, topic)
+            extras = training_extras(db, topic, follows, float(w.sum()))
             lam = regularisation_for(len(y))
-            cv = cross_validated_auc(lambda p=prod_prior, st=st: RankerModel.prior_only(p, st), E, S, y, w, lam, extra=background)
-            print(f"  PRODUCTION SETTING (lambda={lam:.3f}, with background negatives)   CV AUC {cv:.3f}")
+
+            def fresh(base=base):
+                return RankerModel.prior_only(base.prior_vector, (base.cos_mu, base.cos_sigma), base.center)
+
+            cv = cross_validated_auc(fresh, E, S, y, w, lam, extra=extras)
+            full = fresh().fit(np.vstack([E, extras[0]]), np.vstack([S, extras[1]]), np.concatenate([y, extras[2]]), np.concatenate([w, extras[3]]), lam=lam)
+            seed = full.prior_vector
+            seed_p = float(full.predict_proba(seed[None, :], np.zeros((1, S.shape[1])))[0])
+            print(f"  PRODUCTION SETTING (lambda={lam:.3f})   CV AUC {cv:.3f} | paper identical to the topic vector scores {seed_p:.2f} | intercept moved {full.bias - full.prior_bias:+.2f}")
+            db.expire(topic)
         # Ablation: embedding only vs sparse only, S2 prior if available else legacy
         prior = s2_priors.get(topic.id) or topic.embedding
         if prior is not None:

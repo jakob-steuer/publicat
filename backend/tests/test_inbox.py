@@ -186,3 +186,62 @@ def test_topic_tags_add_and_remove_without_touching_item_state(client, db):
     assert {v["topic_name"]: v["vote"] for v in starred[0]["topic_votes"]} == {"A": None, "B": 2}
     inbox = client.get("/inbox/", params={"filter": "starred"}).json()
     assert len(inbox["items"][0]["topic_votes"]) == 2
+
+
+def test_biorxiv_harvest_reads_every_page(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from src.sources import oai_pmh
+
+    calls = []
+
+    class FakeResp:
+        status_code = 200
+        headers = {}
+
+        def __init__(self, cursor):
+            self.cursor = cursor
+
+        def json(self):
+            n = 30 if self.cursor < 60 else 10
+            return {"messages": [{"count": 30, "total": "70"}], "collection": [{"doi": f"10.1101/x{self.cursor + i}"} for i in range(n)]}
+
+    async def fake_get(client, url, timeout, attempts=3):
+        cursor = int(url.rsplit("/", 1)[1])
+        calls.append(cursor)
+        return FakeResp(cursor)
+
+    monkeypatch.setattr(oai_pmh, "_get_with_retry", fake_get)
+    dois = asyncio.run(oai_pmh.harvest_biorxiv_api(datetime(2026, 11, 1, tzinfo=timezone.utc)))
+    assert calls == [0, 30, 60] and len(dois) == 70
+
+
+def test_arxiv_harvest_follows_resumption_tokens(monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from src.sources import oai_pmh
+
+    def page(ids, token):
+        recs = "".join(f"<record><header><identifier>oai:arXiv.org:{i}</identifier></header></record>" for i in ids)
+        tok = f"<resumptionToken>{token}</resumptionToken>" if token else "<resumptionToken/>"
+        return f'<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"><ListRecords>{recs}{tok}</ListRecords></OAI-PMH>'
+
+    class FakeResp:
+        status_code = 200
+        headers = {}
+
+        def __init__(self, text):
+            self.text = text
+
+    urls = []
+
+    async def fake_get(client, url, timeout, attempts=3):
+        urls.append(url)
+        return FakeResp(page(["2511.00001", "2511.00002"], "tok1") if "resumptionToken=" not in url else page(["2511.00003"], ""))
+
+    monkeypatch.setattr(oai_pmh, "_get_with_retry", fake_get)
+    ids = asyncio.run(oai_pmh.harvest_arxiv_oai(["q-bio"], datetime(2026, 11, 1, tzinfo=timezone.utc)))
+    assert ids == ["ARXIV:2511.00001", "ARXIV:2511.00002", "ARXIV:2511.00003"]
+    assert len(urls) == 2 and "resumptionToken=tok1" in urls[1]

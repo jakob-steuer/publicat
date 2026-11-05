@@ -33,6 +33,15 @@ STOPWORDS = set(
 )
 
 
+GENERIC_WORDS = set(
+    "protein proteins molecular molecule molecules rna dna gene genes genome genomic cell cells cellular cancer tumor tumour "
+    "disease diseases patient patients clinical model models modeling modelling learning machine deep neural network networks "
+    "data dataset datasets structure structures structural function functional sequence sequences mutation mutations design "
+    "prediction predicting predict discovery identification characterization expression regulation mechanism mechanisms "
+    "biology biological computational systems system framework review perspective insights evidence".split()
+)
+
+
 class ZoteroLibraryError(Exception):
     """Zotero is not reachable or refused the request; the message is user-facing."""
 
@@ -166,10 +175,8 @@ def suggest_keywords(titles: list[str], max_keywords: int = 5) -> list[str]:
         bigrams.update(pairs)
     min_count = max(2, len(titles) // 15)
     picked = [p for p, c in bigrams.most_common(12) if c >= min_count][:max_keywords]
-    covered = {w for p in picked for w in p.split()}
-    for w, c in unigrams.most_common(20):
-        if len(picked) >= max_keywords:
-            break
-        if c >= min_count and w not in covered:
-            picked.append(w)
-    return picked
+    if picked:
+        return picked
+    # No recurring phrase: fall back to single words, but never the ones that occur in
+    # almost any paper of a field ("protein", "molecular") and therefore say nothing.
+    return [w for w, c in unigrams.most_common(30) if c >= min_count and w not in GENERIC_WORDS and len(w) >= 6][:max_keywords]

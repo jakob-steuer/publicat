@@ -19,7 +19,7 @@ from src.models.item_score import ItemScore
 from src.models.topic import Topic
 from src.models.topic_model import TopicModel
 from src.ranking import features
-from src.ranking.model import RankerModel, cross_validated_auc
+from src.ranking.model import MODEL_VERSION, RankerModel, cross_validated_auc
 from src.ranking.paper import Follows, Paper, load_follows
 from src.ranking.scoring import apply_to_entry, score_against_topic
 
@@ -54,7 +54,14 @@ BACKGROUND_SAMPLE = 1000
 MIN_BACKGROUND = 50
 
 
-def background_cos_stats(db: Session, prior_vector) -> tuple[float, float] | None:
+def background_embeddings(db: Session) -> np.ndarray | None:
+    """Unit embeddings of a random sample of stored papers ("what a typical paper looks like")."""
+    rows = db.query(Item.embedding).filter(Item.embedding.isnot(None)).order_by(func.random()).limit(BACKGROUND_SAMPLE).all()
+    units = [u for u in (features.unit(emb) for (emb,) in rows) if u is not None]
+    return np.array(units) if len(units) >= MIN_BACKGROUND else None
+
+
+def background_cos_stats(db: Session, prior_vector, sample: np.ndarray | None = None) -> tuple[float, float] | None:
     """Mean/std of cosine between a random sample of stored papers and the topic vector.
 
     This is what makes the cold-start probability meaningful: it says how far
@@ -62,17 +69,20 @@ def background_cos_stats(db: Session, prior_vector) -> tuple[float, float] | Non
     """
     if prior_vector is None:
         return None
+    sample = sample if sample is not None else background_embeddings(db)
+    if sample is None:
+        return None
     pv = np.asarray(prior_vector, dtype=float)
     pv = pv / (np.linalg.norm(pv) or 1.0)
-    rows = db.query(Item.embedding).filter(Item.embedding.isnot(None)).order_by(func.random()).limit(BACKGROUND_SAMPLE).all()
-    cos = []
-    for (emb,) in rows:
-        u = features.unit(emb)
-        if u is not None:
-            cos.append(float(u @ pv))
-    if len(cos) < MIN_BACKGROUND:
-        return None
+    cos = sample @ pv
     return float(np.mean(cos)), float(np.std(cos))
+
+
+def prior_model(db: Session, topic: Topic) -> RankerModel:
+    """The topic's model before any vote: calibrated prior plus the centre the learned part will use."""
+    prior = prior_vector_for(topic)
+    sample = background_embeddings(db)
+    return RankerModel.prior_only(prior, background_cos_stats(db, prior, sample), sample.mean(axis=0) if sample is not None else None)
 
 
 def load_models(db: Session, topics: Iterable[Topic]) -> dict[str, RankerModel]:
@@ -82,8 +92,7 @@ def load_models(db: Session, topics: Iterable[Topic]) -> dict[str, RankerModel]:
         if row:
             models[topic.id] = RankerModel.from_dict(row.payload)
         else:
-            prior = prior_vector_for(topic)
-            models[topic.id] = RankerModel.prior_only(prior, background_cos_stats(db, prior))
+            models[topic.id] = prior_model(db, topic)
     return models
 
 
@@ -152,23 +161,53 @@ def background_examples(db: Session, topic: Topic, follows: Follows, real_weight
     return np.array(E), np.array(S), np.zeros(len(E)), np.full(len(E), total / len(E))
 
 
+SEED_ANCHOR_WEIGHT = 3.0
+
+
+def seed_anchor(topic: Topic):
+    """The topic vector itself as a positive example: a paper identical to the user's
+    seed papers must stay a hit, however many shown papers were rejected."""
+    e = features.unit(prior_vector_for(topic))
+    if e is None:
+        return None
+    return e[None, :], np.zeros((1, len(features.SPARSE_FEATURES))), np.ones(1), np.full(1, SEED_ANCHOR_WEIGHT)
+
+
+def training_extras(db: Session, topic: Topic, follows: Follows, real_weight: float):
+    """Train-only examples that anchor the model: background negatives + the seed anchor."""
+    parts = [p for p in (background_examples(db, topic, follows, real_weight), seed_anchor(topic)) if p is not None]
+    if not parts:
+        return None
+    return tuple(np.concatenate([p[i] for p in parts]) if parts[0][i].ndim == 1 else np.vstack([p[i] for p in parts]) for i in range(4))
+
+
 def train_topic(db: Session, topic: Topic, follows: Follows | None = None, lam: float | None = None) -> RankerModel:
     follows = follows or load_follows(db)
     E, S, y, w = labeled_examples(db, topic, follows)
-    prior = prior_vector_for(topic)
-    stats = background_cos_stats(db, prior)
-    model = RankerModel.prior_only(prior, stats)
+    base = prior_model(db, topic)
+    stats = (base.cos_mu, base.cos_sigma)
+
+    def fresh() -> RankerModel:
+        return RankerModel.prior_only(base.prior_vector, stats, base.center)
+
+    model = fresh()
     lam = regularisation_for(len(y)) if lam is None else lam
     if len(y) > 0:
-        background = background_examples(db, topic, follows, float(w.sum()))
-        model.cv_auc = cross_validated_auc(lambda: RankerModel.prior_only(prior, stats), E, S, y, w, lam, extra=background)
-        if background is not None:
-            Eb, Sb, yb, wb = background
+        extras = training_extras(db, topic, follows, float(w.sum()))
+        model.cv_auc = cross_validated_auc(fresh, E, S, y, w, lam, extra=extras)
+        if extras is not None:
+            Eb, Sb, yb, wb = extras
             model.fit(np.vstack([E, Eb]), np.vstack([S, Sb]), np.concatenate([y, yb]), np.concatenate([w, wb]), lam=lam)
             model.n_pos, model.n_neg = int(y.sum()), int(len(y) - y.sum())  # report real votes only
         else:
             model.fit(E, S, y, w, lam=lam)
-    model.meta = {"n_examples": int(len(y)), "background_stats": stats}
+    seed = features.unit(prior_vector_for(topic))
+    model.meta = {
+        "n_examples": int(len(y)),
+        "background_stats": stats,
+        # health check: what a paper identical to the seed papers scores (should stay high)
+        "seed_score": float(model.predict_proba(seed[None, :], np.zeros((1, len(features.SPARSE_FEATURES))))[0]) if seed is not None else None,
+    }
 
     row = db.get(TopicModel, topic.id)
     if row is None:
@@ -266,6 +305,9 @@ def ensure_models(db: Session) -> list[str]:
     """Train a model for every active topic that has none yet (first start after the upgrade)."""
     trained = []
     for topic in db.query(Topic).filter(Topic.is_active == True).all():  # noqa: E712
-        if db.get(TopicModel, topic.id) is None:
+        row = db.get(TopicModel, topic.id)
+        # also retrain models saved by an older ranker version: their weights do not
+        # mean the same thing under the current scoring
+        if row is None or int((row.payload or {}).get("version", 1)) < MODEL_VERSION:
             trained.append(topic.id)
     return trained

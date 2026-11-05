@@ -111,8 +111,12 @@ def _topic_feedback(db: Session, topics: List[Topic]) -> dict:
             .order_by(ItemScore.voted_at.desc().nullslast(), Item.published_at.desc())
             .all()
         )
+        positive = [pid for vote, pid in rows if vote >= 1 and pid]
+        # Seed papers are known hits: they give the recommender something to work with
+        # before there are any votes, independent of how good the keywords are.
+        seeds = [s.get("paperId") for s in (topic.seed_papers or []) if s.get("paperId")]
         feedback[topic.id] = {
-            "positive": [pid for vote, pid in rows if vote >= 1 and pid][:FEEDBACK_SEEDS],
+            "positive": list(dict.fromkeys(positive + seeds))[:FEEDBACK_SEEDS],
             "negative": [pid for vote, pid in rows if vote == -1 and pid][:FEEDBACK_SEEDS],
         }
     return feedback

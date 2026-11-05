@@ -25,7 +25,21 @@ import numpy as np
 from src.ranking.features import EMBEDDING_DIM, PRIOR_SPARSE_WEIGHTS, SPARSE_FEATURES, FeatureRow
 
 DEFAULT_LAMBDA = 0.1
-MODEL_VERSION = 2
+MODEL_VERSION = 3
+
+# Votes exist only for papers that were shown, i.e. papers the prior already liked.
+# Fitted naively, "half of the shown papers were rejected" becomes a large negative
+# intercept that then sinks every paper, including ones identical to the seeds.
+# Three guards keep feedback about *which* papers, not about the overall level:
+#   - the intercept is held close to the prior (strong, fixed penalty),
+#   - the learned embedding weights only see the part of an embedding orthogonal
+#     to the topic vector and to the mean of all papers, so they can neither
+#     imitate an intercept nor down-weight the topic as a whole,
+#   - sparse-feature weights keep a minimum pull towards their defaults.
+BIAS_LAMBDA = 3.0
+MAX_BIAS_SHIFT = 1.0  # logits; 0.5 -> 0.27 at most
+SPARSE_LAMBDA_MIN = 0.5
+NON_NEGATIVE_FEATURES = {"kw_title", "kw_abstract", "followed_author", "journal_tier"}
 
 # Cold-start calibration: a paper whose cosine to the topic vector is this many
 # standard deviations above the background mean gets probability 0.5.
@@ -46,6 +60,7 @@ class RankerModel:
     bias: float
     cos_mu: float = FALLBACK_COS_STATS[0]  # background mean cosine of papers to the topic vector
     cos_sigma: float = FALLBACK_COS_STATS[1]
+    center: np.ndarray | None = None  # mean unit embedding of background papers (projected out of the learned part)
     n_pos: int = 0
     n_neg: int = 0
     cv_auc: float | None = None
@@ -56,7 +71,7 @@ class RankerModel:
 
     # ----------------------------------------------------------------- prior
     @classmethod
-    def prior_only(cls, prior_vector, cos_stats: tuple[float, float] | None = None) -> "RankerModel":
+    def prior_only(cls, prior_vector, cos_stats: tuple[float, float] | None = None, center=None) -> "RankerModel":
         """Model before any vote: z-scored cosine to the topic vector plus default sparse weights.
 
         cos_stats = (mean, std) of the cosine between background papers and the
@@ -77,9 +92,40 @@ class RankerModel:
             bias=0.0,
             cos_mu=float(mu),
             cos_sigma=sigma,
+            center=np.asarray(center, dtype=float) if center is not None else None,
         )
         m.bias = m.prior_bias
         return m
+
+    def centred(self, E: np.ndarray) -> np.ndarray:
+        """What the learned weights see: the part of each embedding that is orthogonal
+        to both the topic vector and the mean of all papers.
+
+        Those two directions carry "how much is this paper on the topic" and "how
+        much is it a paper at all". Both belong to the prior and stay fixed. Votes
+        can therefore only express preferences *within* the topic (sub-themes,
+        methods, paper types): rejecting many shown papers cannot turn into "less
+        of this whole topic", and a paper like the seeds always remains a hit.
+        """
+        basis = self._fixed_directions()
+        out = E
+        for u in basis:
+            out = out - np.outer(out @ u, u) if out.ndim == 2 else out - (out @ u) * u
+        return out
+
+    def _fixed_directions(self) -> list[np.ndarray]:
+        """Orthonormal basis of span{topic vector, background mean}."""
+        basis: list[np.ndarray] = []
+        for vec in (self.prior_vector, self.center):
+            if vec is None:
+                continue
+            v = np.asarray(vec, dtype=float).copy()
+            for u in basis:
+                v = v - (v @ u) * u
+            n = np.linalg.norm(v)
+            if n > 1e-8:
+                basis.append(v / n)
+        return basis
 
     @property
     def prior_scale(self) -> float:
@@ -101,8 +147,7 @@ class RankerModel:
     # ------------------------------------------------------------- inference
     def logits(self, E: np.ndarray, S: np.ndarray) -> np.ndarray:
         """E: (n, 768) unit embeddings (rows may be zero when missing); S: (n, k)."""
-        w_emb = self.prior_emb_weights + self.emb_weights
-        return self.bias + E @ w_emb + S @ self.sparse_weights
+        return self.bias + E @ self.prior_emb_weights + self.centred(E) @ self.emb_weights + S @ self.sparse_weights
 
     def predict_proba(self, E: np.ndarray, S: np.ndarray) -> np.ndarray:
         return sigmoid(self.logits(E, S))
@@ -129,7 +174,7 @@ class RankerModel:
             z = (cos - self.cos_mu) / self.cos_sigma
             parts.append((self.prior_bias + self.prior_scale * cos, f"Topic similarity: {z:+.1f} sd vs. a typical paper (cos {cos:.2f})"))
             if self.is_trained:
-                learned = float(e @ self.emb_weights)
+                learned = float(self.centred(e) @ self.emb_weights)
                 if abs(learned) >= 0.05:
                     parts.append((learned, "Resembles papers you upvoted" if learned > 0 else "Resembles papers you skipped or downvoted"))
         contrib = row.sparse * self.sparse_weights
@@ -166,9 +211,9 @@ class RankerModel:
         yy = np.where(np.asarray(y) > 0, 1.0, -1.0)
         k = S.shape[1]
         theta0 = np.concatenate([np.zeros(EMBEDDING_DIM), PRIOR_SPARSE_WEIGHTS, [self.prior_bias]])
-        # penalty scale per coordinate: full on weights, light on bias
-        pen = np.concatenate([np.full(EMBEDDING_DIM, lam), np.full(k, lam), [0.1 * lam]])
+        pen = np.concatenate([np.full(EMBEDDING_DIM, lam), np.full(k, max(lam, SPARSE_LAMBDA_MIN)), [BIAS_LAMBDA]])
         base_logit = E @ self.prior_emb_weights  # fixed prior offset
+        E = self.centred(E)  # the learned deviation sees centred embeddings only
 
         def unpack(theta):
             return theta[:EMBEDDING_DIM], theta[EMBEDDING_DIM : EMBEDDING_DIM + k], theta[-1]
@@ -184,8 +229,21 @@ class RankerModel:
             grad = np.concatenate([E.T @ g, S.T @ g, [g.sum()]]) + pen * diff
             return loss, grad
 
+        # The user chose keywords, followed authors and journals as things they want.
+        # Votes may shrink those weights to zero but never turn them into penalties:
+        # a generic keyword that shows up in rejected papers must not sink every
+        # paper that contains it.
+        # The intercept may adapt a little (a user who rejects most of what is shown wants
+        # somewhat less), but only within a narrow band around the prior.
+        bias_bounds = (self.prior_bias - MAX_BIAS_SHIFT, self.prior_bias + MAX_BIAS_SHIFT)
+        bounds = [(None, None)] * EMBEDDING_DIM + [(0.0, None) if name in NON_NEGATIVE_FEATURES else (None, None) for name in SPARSE_FEATURES] + [bias_bounds]
         start = np.concatenate([self.emb_weights, self.sparse_weights, [self.bias]])
-        res = minimize(objective, start, jac=True, method="L-BFGS-B", options={"maxiter": 500})
+        for i, (lo, hi) in enumerate(bounds):
+            if lo is not None and start[i] < lo:
+                start[i] = lo
+            if hi is not None and start[i] > hi:
+                start[i] = hi
+        res = minimize(objective, start, jac=True, method="L-BFGS-B", bounds=bounds, options={"maxiter": 500})
         v, ws, b = unpack(res.x)
         self.emb_weights = v
         self.sparse_weights = ws
@@ -207,6 +265,7 @@ class RankerModel:
             "bias": self.bias,
             "cos_mu": self.cos_mu,
             "cos_sigma": self.cos_sigma,
+            "center": self.center.tolist() if self.center is not None else None,
             "n_pos": self.n_pos,
             "n_neg": self.n_neg,
             "cv_auc": self.cv_auc,
@@ -228,6 +287,7 @@ class RankerModel:
             bias=float(d["bias"]),
             cos_mu=float(d.get("cos_mu", FALLBACK_COS_STATS[0])),
             cos_sigma=float(d.get("cos_sigma", FALLBACK_COS_STATS[1])),
+            center=np.asarray(d["center"], dtype=float) if d.get("center") is not None else None,
             n_pos=int(d.get("n_pos", 0)),
             n_neg=int(d.get("n_neg", 0)),
             cv_auc=d.get("cv_auc"),

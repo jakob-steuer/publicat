@@ -304,3 +304,17 @@ def test_interrupted_runs_are_closed_on_startup(db):
     db.expire_all()
     statuses = {r.job: r.status for r in db.query(SyncRun).all()}
     assert statuses == {"initial fetch": "interrupted", "older": "complete"}
+
+
+def test_models_from_an_older_ranker_version_are_retrained_at_startup(db):
+    from src.models.topic_model import TopicModel
+    from src.ranking.model import MODEL_VERSION, RankerModel
+    from src.ranking.training import ensure_models
+
+    old, current, missing = _topic(db, "old", 1), _topic(db, "current", 2), _topic(db, "missing", 3)
+    payload_old = RankerModel.prior_only(unit_vector(1)).to_dict()
+    payload_old["version"] = MODEL_VERSION - 1
+    db.add(TopicModel(topic_id=old.id, payload=payload_old))
+    db.add(TopicModel(topic_id=current.id, payload=RankerModel.prior_only(unit_vector(2)).to_dict()))
+    db.commit()
+    assert set(ensure_models(db)) == {old.id, missing.id}

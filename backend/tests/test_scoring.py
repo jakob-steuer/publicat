@@ -127,3 +127,32 @@ def test_fit_with_sparse_signal_adjusts_default_weight():
     y = np.array([0] * 30 + [1] * 30)
     model = RankerModel.prior_only(None).fit(E, S, y, lam=0.3)
     assert model.sparse_weights[idx] < -1.0
+
+
+def test_keyword_weight_cannot_become_a_penalty():
+    """Rejected papers that all contain a generic keyword must not make the keyword negative."""
+    E = np.array([unit_vector(300 + i) for i in range(40)])
+    S = np.zeros((40, len(features.SPARSE_FEATURES)))
+    kw = features.SPARSE_FEATURES.index("kw_abstract")
+    S[:, kw] = 3.0  # every paper has three keyword hits
+    y = np.array([0] * 36 + [1] * 4)
+    model = RankerModel.prior_only(unit_vector(1), (0.0, 0.1)).fit(E, S, y, np.full(40, 2.0), lam=0.3)
+    assert model.sparse_weights[kw] >= 0.0
+    assert abs(model.bias - model.prior_bias) < 2.0  # the intercept stays close to the prior
+
+
+def test_votes_cannot_sink_the_topic_itself():
+    """Downvoting many on-topic papers must leave a paper identical to the topic vector a hit."""
+    t = np.array(unit_vector(1))
+    center = np.array(unit_vector(2)) * 0.2
+    E, y = [], []
+    for i in range(30):  # 28 rejected, 2 liked, all close to the topic
+        v = 0.9 * t + 0.1 * np.array(unit_vector(400 + i))
+        E.append(v / np.linalg.norm(v))
+        y.append(1 if i < 2 else 0)
+    E, y = np.array(E), np.array(y)
+    S = np.zeros((30, len(features.SPARSE_FEATURES)))
+    model = RankerModel.prior_only(t, (0.0, 0.1), center).fit(E, S, y, np.full(30, 2.0), lam=0.1)
+    seed_p = float(model.predict_proba(t[None, :], np.zeros((1, S.shape[1])))[0])
+    prior_p = float(RankerModel.prior_only(t, (0.0, 0.1), center).predict_proba(t[None, :], np.zeros((1, S.shape[1])))[0])
+    assert seed_p > 0.8 and seed_p > prior_p - 0.15
